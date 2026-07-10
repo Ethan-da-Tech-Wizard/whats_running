@@ -20,6 +20,7 @@ enum Sort {
 #[derive(Clone, Copy)]
 enum Filter {
     All,
+    UserApps,
     Mine,
     Problems,
 }
@@ -76,7 +77,7 @@ pub fn run(interval_ms: u64, show_command: bool, event_limit: Option<usize>) -> 
         }
     });
     let (mut previous, mut selected, mut sort, mut filter, mut tree, mut details) =
-        (None, 0, Sort::Cpu, Filter::All, false, true);
+        (None, 0, Sort::Cpu, Filter::UserApps, false, true);
     let mut view = View::Processes;
     let mut inventory_cache = None;
     let mut search = String::new();
@@ -143,7 +144,8 @@ pub fn run(interval_ms: u64, show_command: bool, event_limit: Option<usize>) -> 
             }
             Ok(b'f') => {
                 filter = match filter {
-                    Filter::All => Filter::Mine,
+                    Filter::All => Filter::UserApps,
+                    Filter::UserApps => Filter::Mine,
                     Filter::Mine => Filter::Problems,
                     Filter::Problems => Filter::All,
                 };
@@ -194,11 +196,84 @@ fn draw(
     let cpu = rates(s, previous);
     let io_rates = io_rates(s, previous);
     let uid = current_uid();
+    let kthreadd_children: std::collections::HashSet<u32> = s
+        .processes
+        .iter()
+        .filter(|p| p.ppid.copied() == Some(2))
+        .map(|p| p.pid)
+        .collect();
     let mut list: Vec<&Process> = s
         .processes
         .iter()
         .filter(|p| match filter {
             Filter::All => true,
+            Filter::UserApps => {
+                // Exclude PID 2 (kthreadd) itself and all its direct children (kernel threads)
+                // Also exclude PID 0 (idle) and any process whose name looks like a kernel worker
+                let pid = p.pid;
+                let ppid = p.ppid.copied();
+                let name = p.name.value().map(|s| s.as_str()).unwrap_or("");
+                pid != 2
+                    && ppid != Some(2)
+                    && !kthreadd_children.contains(&pid)
+                    && !name.starts_with("kworker/")
+                    && !name.starts_with("kthread")
+                    && name != "kthreadd"
+                    && !name.starts_with("ksoftirqd")
+                    && !name.starts_with("migration/")
+                    && !name.starts_with("idle_inject/")
+                    && !name.starts_with("rcu_")
+                    && !name.starts_with("rcub/")
+                    && !name.starts_with("rcuc/")
+                    && !name.starts_with("kswapd")
+                    && !name.starts_with("kcompactd")
+                    && !name.starts_with("khugepaged")
+                    && !name.starts_with("kdevtmpfs")
+                    && !name.starts_with("netns")
+                    && !name.starts_with("kauditd")
+                    && !name.starts_with("khungtaskd")
+                    && !name.starts_with("oom_reaper")
+                    && !name.starts_with("writeback")
+                    && !name.starts_with("kblockd")
+                    && !name.starts_with("blkcg_punt_bio")
+                    && !name.starts_with("edac-poller")
+                    && !name.starts_with("devfreq_wq")
+                    && !name.starts_with("watchdogd")
+                    && !name.starts_with("watchdog/")
+                    && !name.starts_with("irq/")
+                    && !name.starts_with("card")
+                    && !name.starts_with("i915")
+                    && !name.starts_with("nouveau")
+                    && !name.starts_with("amdgpu")
+                    && !name.starts_with("jbd2/")
+                    && !name.starts_with("ext4-")
+                    && !name.starts_with("xfs-")
+                    && !name.starts_with("btrfs")
+                    && !name.starts_with("cryptd")
+                    && !name.starts_with("zswap-")
+                    && !name.starts_with("dm-")
+                    && !name.starts_with("md")
+                    && !name.starts_with("hwrng")
+                    && !name.starts_with("acpi_thermal_pm")
+                    && !name.starts_with("ipv6_addrconf")
+                    && !name.starts_with("nfsiod")
+                    && !name.starts_with("scsi_")
+                    && !name.starts_with("usb-storage")
+                    && !name.starts_with("cfg80211")
+                    && !name.starts_with("rpciod")
+                    && !name.starts_with("xprtiod")
+                    && !name.starts_with("pool_workqueue")
+                    && !name.starts_with("charger_manager")
+                    && !name.starts_with("nvme-wq")
+                    && !name.starts_with("nvme-reset-wq")
+                    && !name.starts_with("nvme-delete-wq")
+                    && !name.starts_with("mld")
+                    && !name.starts_with("inet_frag_wq")
+                    && !name.starts_with("bioset")
+                    && !name.starts_with("ttm")
+                    && !name.starts_with("drm_sched")
+                    && !name.starts_with("drm-")
+            }
             Filter::Mine => p.uid.copied() == uid,
             Filter::Problems => p.visibility_summary() != "complete",
         })
@@ -505,6 +580,7 @@ fn sort_name(v: Sort) -> &'static str {
 fn filter_name(v: Filter) -> &'static str {
     match v {
         Filter::All => "all",
+        Filter::UserApps => "user-apps (no kernel threads)",
         Filter::Mine => "mine",
         Filter::Problems => "problems",
     }
