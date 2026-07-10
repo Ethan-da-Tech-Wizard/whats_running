@@ -1,6 +1,7 @@
 mod activity;
 mod check;
 mod events;
+mod gui;
 mod procfs;
 mod recording;
 mod tui;
@@ -24,6 +25,7 @@ struct Options {
     samples: usize,
     interval_ms: u64,
     tui: bool,
+    gui: bool,
     events: Option<usize>,
     inventory: bool,
     check: bool,
@@ -45,6 +47,9 @@ fn run() -> Result<(), String> {
     let Some(options) = parse_args()? else {
         return Ok(());
     };
+    if options.gui {
+        return gui::run().map_err(|e| e.to_string());
+    }
     if options.tui && options.record.is_some() {
         return Err("--record is for finite --events capture, not TUI mode".into());
     }
@@ -278,6 +283,7 @@ fn parse_args() -> Result<Option<Options>, String> {
         samples: 1,
         interval_ms: 1000,
         tui: false,
+        gui: false,
         events: None,
         inventory: false,
         check: false,
@@ -291,6 +297,7 @@ fn parse_args() -> Result<Option<Options>, String> {
             "--show-command" => options.show_command = true,
             "--samples" => options.samples = positive(args.next(), "--samples")?,
             "--interval-ms" => options.interval_ms = positive(args.next(), "--interval-ms")? as u64,
+            "--gui" => options.gui = true,
             "--tui" => options.tui = true,
             "--events" => options.events = Some(positive(args.next(), "--events")?),
             "--inventory" => options.inventory = true,
