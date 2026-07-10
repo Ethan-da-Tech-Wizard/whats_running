@@ -147,6 +147,15 @@ pub enum FilterMode {
     Mine,
 }
 
+/// Update speed setting (refresh interval).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateSpeed {
+    High,   // 0.5s
+    Normal, // 1s
+    Low,    // 3s
+    Paused, // Freeze
+}
+
 /// A single display row in the process list.
 ///
 /// A `DisplayRow` is either the *header* for a group of identically-named
@@ -212,6 +221,9 @@ pub enum Message {
     /// User clicked a group header row to expand or collapse it.
     ToggleGroup(String),
 
+    /// User clicked an update speed selector button.
+    SetUpdateSpeed(UpdateSpeed),
+
     /// Raw Iced event — used to intercept keyboard presses for navigation.
     IcedEvent(iced::Event),
 }
@@ -255,6 +267,9 @@ pub struct App {
     /// A group that is NOT in this set is expanded (children visible).
     /// We default to all groups expanded, so this starts empty.
     collapsed: HashSet<String>,
+
+    /// Speed at which process data is polled and refreshed.
+    update_speed: UpdateSpeed,
 }
 
 impl App {
@@ -273,6 +288,7 @@ impl App {
                 search: String::new(),
                 selected: None,
                 collapsed: HashSet::new(), // all groups start expanded
+                update_speed: UpdateSpeed::Normal,
             },
             Task::none(),
         )
@@ -356,6 +372,11 @@ impl App {
                 }
             }
 
+            // ── Set update speed ──────────────────────────────────────────────
+            Message::SetUpdateSpeed(speed) => {
+                self.update_speed = speed;
+            }
+
 
 
             // ── Raw event: intercept arrow / j-k keys ─────────────────────────
@@ -383,12 +404,24 @@ impl App {
     /// 1. A 1-second timer that drives the data refresh loop.
     /// 2. All keyboard events so we can implement arrow-key navigation.
     pub fn subscription(&self) -> Subscription<Message> {
+        let timer = match self.update_speed {
+            UpdateSpeed::High => {
+                time::every(Duration::from_millis(500)).map(|_| Message::Tick(()))
+            }
+            UpdateSpeed::Normal => {
+                time::every(Duration::from_secs(1)).map(|_| Message::Tick(()))
+            }
+            UpdateSpeed::Low => {
+                time::every(Duration::from_secs(3)).map(|_| Message::Tick(()))
+            }
+            UpdateSpeed::Paused => {
+                Subscription::none()
+            }
+        };
+
         // `Subscription::batch` merges multiple subscriptions into one stream.
         Subscription::batch([
-            // Tick every second.  We use `map(|_| …)` rather than keeping the
-            // `Instant` because we don't need it (the snapshot collection is
-            // wall-clock independent).
-            time::every(Duration::from_secs(1)).map(|_| Message::Tick(())),
+            timer,
 
             // Listen for ALL Iced events and forward them so `update()` can
             // inspect keyboard presses for navigation.
@@ -547,27 +580,49 @@ impl App {
                     if self.sort_asc { a.cmp(b) } else { b.cmp(a) }
                 }
                 SortCol::Cpu => {
-                    if self.sort_asc {
-                        ga.total_cpu.partial_cmp(&gb.total_cpu)
+                    // Bucket CPU to nearest 0.5% to prevent minor fluctuations from jumping
+                    let ba = (ga.total_cpu * 2.0).round() as i32;
+                    let bb = (gb.total_cpu * 2.0).round() as i32;
+                    if ba != bb {
+                        if self.sort_asc { ba.cmp(&bb) } else { bb.cmp(&ba) }
                     } else {
-                        gb.total_cpu.partial_cmp(&ga.total_cpu)
+                        // Fallback to name for absolute stability
+                        if self.sort_asc { a.cmp(b) } else { b.cmp(a) }
                     }
-                    .unwrap_or(std::cmp::Ordering::Equal)
                 }
                 SortCol::Memory => {
-                    if self.sort_asc { ga.total_rss.cmp(&gb.total_rss) } else { gb.total_rss.cmp(&ga.total_rss) }
+                    // Bucket memory to nearest 1 MB (1024 KiB)
+                    let ba = ga.total_rss / 1024;
+                    let bb = gb.total_rss / 1024;
+                    if ba != bb {
+                        if self.sort_asc { ba.cmp(&bb) } else { bb.cmp(&ba) }
+                    } else {
+                        if self.sort_asc { a.cmp(b) } else { b.cmp(a) }
+                    }
                 }
                 SortCol::ReadRate => {
                     let ra: f64 = group_map[a].iter().filter_map(|p| io_map.get(&(p.pid, p.start_ticks.copied())).and_then(|v| v.0)).sum();
                     let rb: f64 = group_map[b].iter().filter_map(|p| io_map.get(&(p.pid, p.start_ticks.copied())).and_then(|v| v.0)).sum();
-                    if self.sort_asc { ra.partial_cmp(&rb) } else { rb.partial_cmp(&ra) }
-                        .unwrap_or(std::cmp::Ordering::Equal)
+                    // Bucket to nearest 10 KB/s
+                    let ba = (ra / 10240.0).round() as i64;
+                    let bb = (rb / 10240.0).round() as i64;
+                    if ba != bb {
+                        if self.sort_asc { ba.cmp(&bb) } else { bb.cmp(&ba) }
+                    } else {
+                        if self.sort_asc { a.cmp(b) } else { b.cmp(a) }
+                    }
                 }
                 SortCol::WriteRate => {
                     let wa: f64 = group_map[a].iter().filter_map(|p| io_map.get(&(p.pid, p.start_ticks.copied())).and_then(|v| v.1)).sum();
                     let wb: f64 = group_map[b].iter().filter_map(|p| io_map.get(&(p.pid, p.start_ticks.copied())).and_then(|v| v.1)).sum();
-                    if self.sort_asc { wa.partial_cmp(&wb) } else { wb.partial_cmp(&wa) }
-                        .unwrap_or(std::cmp::Ordering::Equal)
+                    // Bucket to nearest 10 KB/s
+                    let ba = (wa / 10240.0).round() as i64;
+                    let bb = (wb / 10240.0).round() as i64;
+                    if ba != bb {
+                        if self.sort_asc { ba.cmp(&bb) } else { bb.cmp(&ba) }
+                    } else {
+                        if self.sort_asc { a.cmp(b) } else { b.cmp(a) }
+                    }
                 }
             }
         });
@@ -595,7 +650,15 @@ impl App {
                 sorted_members.sort_by(|a, b| {
                     let ca = cpu_map.get(&(a.pid, a.start_ticks.copied())).copied().unwrap_or(0.0);
                     let cb = cpu_map.get(&(b.pid, b.start_ticks.copied())).copied().unwrap_or(0.0);
-                    cb.partial_cmp(&ca).unwrap_or(std::cmp::Ordering::Equal)
+                    // Bucket CPU to nearest 0.5% for children
+                    let ba = (ca * 2.0).round() as i32;
+                    let bb = (cb * 2.0).round() as i32;
+                    if ba != bb {
+                        bb.cmp(&ba) // busiest first
+                    } else {
+                        // Stable fallback by PID
+                        a.pid.cmp(&b.pid)
+                    }
                 });
 
                 for &p in &sorted_members {
@@ -711,18 +774,42 @@ impl App {
             .on_press(Message::SetFilter(mode))
         };
 
+        let speed_btn = |label: &'static str, speed: UpdateSpeed| {
+            let active = self.update_speed == speed;
+            button(
+                text(label)
+                    .size(12)
+                    .font(Font::MONOSPACE)
+                    .color(if active { BG } else { FG }),
+            )
+            .padding([5, 10])
+            .style(move |_, _| button::Style {
+                background: Some(iced::Background::Color(if active { ACCENT } else { BG3 })),
+                border: iced::Border { radius: 5.0.into(), ..Default::default() },
+                text_color: if active { BG } else { FG },
+                ..Default::default()
+            })
+            .on_press(Message::SetUpdateSpeed(speed))
+        };
+
         let search = text_input("  search…", &self.search)
             .on_input(Message::SearchChanged)
             .padding([5, 10])
             .size(13)
             .font(Font::MONOSPACE)
-            .width(Length::Fixed(240.0));
+            .width(Length::Fixed(200.0));
 
         container(
             row![
                 filter_btn("All", FilterMode::All),
                 filter_btn("Apps", FilterMode::UserApps),
                 filter_btn("Mine", FilterMode::Mine),
+                iced::widget::horizontal_space(),
+                text("Interval:").size(12).font(Font::MONOSPACE).color(FG_DIM),
+                speed_btn("0.5s", UpdateSpeed::High),
+                speed_btn("1s", UpdateSpeed::Normal),
+                speed_btn("3s", UpdateSpeed::Low),
+                speed_btn("Pause", UpdateSpeed::Paused),
                 iced::widget::horizontal_space(),
                 search,
             ]
