@@ -6,10 +6,9 @@ description = "An honest, local-first Linux process snapshot"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-iced = { version = "0.13", features = ["tokio"] }
+iced = { version = "0.13", features = ["tokio", "canvas"] }
 
 [profile.release]
 strip = true
 lto = true
 codegen-units = 1
-
