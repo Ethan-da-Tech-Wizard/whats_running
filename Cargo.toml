@@ -5,6 +5,9 @@ edition = "2024"
 description = "An honest, local-first Linux process snapshot"
 license = "MIT OR Apache-2.0"
 
+[dependencies]
+iced = { version = "0.13", features = ["tokio"] }
+
 [profile.release]
 strip = true
 lto = true
