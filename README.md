@@ -75,4 +75,3 @@ The accepted background-activity M0–M3 milestones are complete: typed process/
 A non-interactive `--check` report was added on top of that baseline for the common case of "just tell me what's running and what ports are open, no dashboard required." See [docs/journal/2026-07-10-2100-quick-check-mode.md](docs/journal/2026-07-10-2100-quick-check-mode.md).
 
 No M4 is defined yet. Portability beyond Arch/systemd/cgroup-v2 was proposed and then explicitly rejected — this project targets Arch Linux only, in order to ship on the AUR (see [ADR-0009](docs/decisions/0009-arch-only-scope-lock.md)). Active next steps are CI automation and AUR packaging; see [docs/journal/2026-07-10-2200-ci-and-aur-packaging.md](docs/journal/2026-07-10-2200-ci-and-aur-packaging.md). Deeper container visibility and an in-TUI help overlay remain proposed, not accepted.
-
