@@ -1,12 +1,14 @@
 # What's Running?
 
+<p align="center"><img src="docs/whats-running-gui.png" alt="What's Running GUI showing a live, sortable process list" width="800"></p>
+
 An honest, local-first answer to a deceptively simple question:
 
 > What is my computer doing in the background right now, and what changed?
 
 The project begins on Arch Linux. It will inventory kernel-visible background activity—including itself—capture lifecycle changes, and expose visibility limitations without pretending that incomplete data is complete.
 
-The first milestone is now usable on Arch Linux: a dependency-free Rust snapshot CLI that reads `/proc`, lists every PID it enumerates, marks itself, records visibility failures, and emits a human table or versioned JSON. The documentation corpus is indexed in [docs/README.md](docs/README.md).
+The first milestone is now usable on Arch Linux: a Rust snapshot tool (CLI, terminal UI and optional GUI) that reads `/proc`, lists every PID it enumerates, marks itself, records visibility failures, and emits a human table or versioned JSON. The documentation corpus is indexed in [docs/README.md](docs/README.md).
 
 ## Quick check
 
@@ -27,6 +29,7 @@ cargo run --release -- --json
 cargo run --release -- --show-command  # warning: arguments can contain secrets
 cargo run --release -- --samples 10 --interval-ms 1000
 cargo run --release -- --tui
+cargo run --release -- --gui
 cargo run --release -- --inventory
 cargo run --release -- --inventory --json
 # Optional kernel lifecycle capture; run with explicit suitable privilege if denied:
@@ -40,7 +43,7 @@ cargo build --release
 install -Dm755 target/release/whats-running ~/.local/bin/whats-running
 ```
 
-The program is read-only, needs no root privileges, makes no network requests, and has no third-party Rust dependencies.
+The program is read-only, needs no root privileges, makes no network requests, and keeps its dependencies minimal: the CLI and TUI use only the Rust standard library, and the optional `--gui` window is the only thing that pulls in a third-party crate ([iced](https://github.com/iced-rs/iced)).
 
 ## TUI controls
 
