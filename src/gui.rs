@@ -1547,9 +1547,7 @@ fn is_kernel_thread_name(name: &str) -> bool {
     // match as prefixes of legitimate user-space processes.
     const EXACT: &[&str] = &["kthreadd", "md"];
 
-    name.is_empty()
-        || PREFIXES.iter().any(|p| name.starts_with(p))
-        || EXACT.contains(&name)
+    name.is_empty() || PREFIXES.iter().any(|p| name.starts_with(p)) || EXACT.contains(&name)
 }
 
 /// Reads the real UID of the current process from `/proc/self/status`.
