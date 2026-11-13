@@ -45,6 +45,8 @@
 
 // ─── Standard imports ─────────────────────────────────────────────────────────
 use std::collections::{HashMap, HashSet};
+
+type IoRateMap = HashMap<(u32, Option<u64>), (Option<f64>, Option<f64>)>;
 use std::time::Duration;
 
 // ─── Iced imports ─────────────────────────────────────────────────────────────
@@ -613,7 +615,7 @@ impl App {
         &self,
         filtered: &[&'a Process],
         cpu_map: &HashMap<(u32, Option<u64>), f64>,
-        io_map: &HashMap<(u32, Option<u64>), (Option<f64>, Option<f64>)>,
+        io_map: &IoRateMap,
     ) -> Vec<DisplayRow<'a>> {
         // ── Step 1: partition into groups (by short name) ─────────────────────
         // We use an insertion-ordered Vec<(name, members)> to preserve a
@@ -1158,7 +1160,7 @@ impl App {
                     let name_cell = text(name_label)
                         .size(13)
                         .font(Font::MONOSPACE)
-                        .color(if is_sel { FG } else { FG })
+                        .color(FG)
                         .width(Length::Fixed(W_NAME));
 
                     // State char → human-readable label + colour.
@@ -1226,7 +1228,7 @@ impl App {
         &self,
         snap: &Snapshot,
         cpu_map: &HashMap<(u32, Option<u64>), f64>,
-        io_map: &HashMap<(u32, Option<u64>), (Option<f64>, Option<f64>)>,
+        io_map: &IoRateMap,
     ) -> Element<'_, Message> {
         let content: Element<'_, Message> = if let Some(pid) = self.selected {
             if let Some(p) = snap.processes.iter().find(|p| p.pid == pid) {
@@ -1547,7 +1549,7 @@ fn is_kernel_thread_name(name: &str) -> bool {
 
     name.is_empty()
         || PREFIXES.iter().any(|p| name.starts_with(p))
-        || EXACT.iter().any(|e| name == *e)
+        || EXACT.contains(&name)
 }
 
 /// Reads the real UID of the current process from `/proc/self/status`.
