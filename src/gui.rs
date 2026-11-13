@@ -49,8 +49,8 @@ use std::time::Duration;
 
 // ─── Iced imports ─────────────────────────────────────────────────────────────
 use iced::keyboard::{self, key::Named};
-use iced::widget::{button, column, container, horizontal_rule, row, scrollable, text, text_input};
 use iced::widget::canvas;
+use iced::widget::{button, column, container, horizontal_rule, row, scrollable, text, text_input};
 
 use iced::{Color, Element, Font, Length, Subscription, Task, Theme};
 use iced::{event, time};
@@ -68,41 +68,116 @@ use crate::{io_rates, mib, rates, used};
 // existing terminal aesthetic of the project.
 
 /// Deepest background — used for the main window and even-numbered rows.
-const BG: Color = Color { r: 0.051, g: 0.059, b: 0.078, a: 1.0 }; // #0d0f14
+const BG: Color = Color {
+    r: 0.051,
+    g: 0.059,
+    b: 0.078,
+    a: 1.0,
+}; // #0d0f14
 
 /// Slightly lighter background — used for odd rows, header bar, toolbar,
 /// detail panel.
-const BG2: Color = Color { r: 0.075, g: 0.086, b: 0.110, a: 1.0 }; // #13161c
+const BG2: Color = Color {
+    r: 0.075,
+    g: 0.086,
+    b: 0.110,
+    a: 1.0,
+}; // #13161c
 
 /// Column-header / button background.
-const BG3: Color = Color { r: 0.110, g: 0.125, b: 0.160, a: 1.0 }; // #1c2028
+const BG3: Color = Color {
+    r: 0.110,
+    g: 0.125,
+    b: 0.160,
+    a: 1.0,
+}; // #1c2028
 
 /// Magenta accent — used for titles, active filter buttons, sort arrows.
-const ACCENT: Color = Color { r: 0.78, g: 0.22, b: 0.55, a: 1.0 }; // #c73889
+const ACCENT: Color = Color {
+    r: 0.78,
+    g: 0.22,
+    b: 0.55,
+    a: 1.0,
+}; // #c73889
 
 /// Primary foreground text colour.
-const FG: Color = Color { r: 0.85, g: 0.87, b: 0.91, a: 1.0 }; // #d9dde8
+const FG: Color = Color {
+    r: 0.85,
+    g: 0.87,
+    b: 0.91,
+    a: 1.0,
+}; // #d9dde8
 
 /// Dimmed text — used for secondary labels and I/O rate cells.
-const FG_DIM: Color = Color { r: 0.50, g: 0.52, b: 0.56, a: 1.0 }; // #80848f
+const FG_DIM: Color = Color {
+    r: 0.50,
+    g: 0.52,
+    b: 0.56,
+    a: 1.0,
+}; // #80848f
 
 /// Selection highlight — used for the currently selected row.
-const SEL: Color = Color { r: 0.18, g: 0.20, b: 0.27, a: 1.0 }; // #2e3345
+const SEL: Color = Color {
+    r: 0.18,
+    g: 0.20,
+    b: 0.27,
+    a: 1.0,
+}; // #2e3345
 
 /// Group header row background — slightly brighter than BG2 to visually
 /// separate app groups from their child rows.
-const BG_GROUP: Color = Color { r: 0.095, g: 0.108, b: 0.140, a: 1.0 }; // #181b24
+const BG_GROUP: Color = Color {
+    r: 0.095,
+    g: 0.108,
+    b: 0.140,
+    a: 1.0,
+}; // #181b24
 
 // Heat-bar colours (used for the thin indicator behind CPU% / Memory values)
-const HEAT_LOW: Color = Color { r: 0.18, g: 0.58, b: 0.30, a: 0.55 }; // translucent green
-const HEAT_MED: Color = Color { r: 0.80, g: 0.62, b: 0.10, a: 0.55 }; // translucent amber
-const HEAT_HIGH: Color = Color { r: 0.80, g: 0.22, b: 0.15, a: 0.65 }; // translucent red
+const HEAT_LOW: Color = Color {
+    r: 0.18,
+    g: 0.58,
+    b: 0.30,
+    a: 0.55,
+}; // translucent green
+const HEAT_MED: Color = Color {
+    r: 0.80,
+    g: 0.62,
+    b: 0.10,
+    a: 0.55,
+}; // translucent amber
+const HEAT_HIGH: Color = Color {
+    r: 0.80,
+    g: 0.22,
+    b: 0.15,
+    a: 0.65,
+}; // translucent red
 
 // Status-label colours
-const STATUS_RUNNING: Color = Color { r: 0.30, g: 0.85, b: 0.45, a: 1.0 }; // green
-const STATUS_SLEEPING: Color = Color { r: 0.50, g: 0.52, b: 0.56, a: 1.0 }; // grey (same as FG_DIM)
-const STATUS_ZOMBIE: Color = Color { r: 0.90, g: 0.20, b: 0.20, a: 1.0 }; // red
-const STATUS_OTHER: Color = Color { r: 1.00, g: 0.70, b: 0.00, a: 1.0 }; // amber
+const STATUS_RUNNING: Color = Color {
+    r: 0.30,
+    g: 0.85,
+    b: 0.45,
+    a: 1.0,
+}; // green
+const STATUS_SLEEPING: Color = Color {
+    r: 0.50,
+    g: 0.52,
+    b: 0.56,
+    a: 1.0,
+}; // grey (same as FG_DIM)
+const STATUS_ZOMBIE: Color = Color {
+    r: 0.90,
+    g: 0.20,
+    b: 0.20,
+    a: 1.0,
+}; // red
+const STATUS_OTHER: Color = Color {
+    r: 1.00,
+    g: 0.70,
+    b: 0.00,
+    a: 1.0,
+}; // amber
 
 // Column pixel widths — kept as named constants so every function that lays out
 // a row uses the same numbers and columns stay perfectly aligned.
@@ -283,7 +358,7 @@ impl App {
                 snapshot: None,
                 previous: None,
                 sort: SortCol::Cpu,
-                sort_asc: false,        // default: highest CPU first
+                sort_asc: false,              // default: highest CPU first
                 filter: FilterMode::UserApps, // start in the clean "Apps" view
                 search: String::new(),
                 selected: None,
@@ -358,7 +433,11 @@ impl App {
             // ── Row click: select or deselect a child process ─────────────────
             Message::SelectRow(pid) => {
                 // Toggle: clicking the already-selected row deselects it.
-                self.selected = if self.selected == Some(pid) { None } else { Some(pid) };
+                self.selected = if self.selected == Some(pid) {
+                    None
+                } else {
+                    Some(pid)
+                };
             }
 
             // ── Group header click: expand or collapse ────────────────────────
@@ -377,12 +456,9 @@ impl App {
                 self.update_speed = speed;
             }
 
-
-
             // ── Raw event: intercept arrow / j-k keys ─────────────────────────
             Message::IcedEvent(iced::Event::Keyboard(keyboard::Event::KeyPressed {
-                key,
-                ..
+                key, ..
             })) => match key {
                 keyboard::Key::Named(Named::ArrowUp) => self.move_selection(-1),
                 keyboard::Key::Named(Named::ArrowDown) => self.move_selection(1),
@@ -405,24 +481,15 @@ impl App {
     /// 2. All keyboard events so we can implement arrow-key navigation.
     pub fn subscription(&self) -> Subscription<Message> {
         let timer = match self.update_speed {
-            UpdateSpeed::High => {
-                time::every(Duration::from_millis(500)).map(|_| Message::Tick(()))
-            }
-            UpdateSpeed::Normal => {
-                time::every(Duration::from_secs(1)).map(|_| Message::Tick(()))
-            }
-            UpdateSpeed::Low => {
-                time::every(Duration::from_secs(3)).map(|_| Message::Tick(()))
-            }
-            UpdateSpeed::Paused => {
-                Subscription::none()
-            }
+            UpdateSpeed::High => time::every(Duration::from_millis(500)).map(|_| Message::Tick(())),
+            UpdateSpeed::Normal => time::every(Duration::from_secs(1)).map(|_| Message::Tick(())),
+            UpdateSpeed::Low => time::every(Duration::from_secs(3)).map(|_| Message::Tick(())),
+            UpdateSpeed::Paused => Subscription::none(),
         };
 
         // `Subscription::batch` merges multiple subscriptions into one stream.
         Subscription::batch([
             timer,
-
             // Listen for ALL Iced events and forward them so `update()` can
             // inspect keyboard presses for navigation.
             event::listen().map(Message::IcedEvent),
@@ -441,8 +508,18 @@ impl App {
                 background: BG,
                 text: FG,
                 primary: ACCENT,
-                success: Color { r: 0.30, g: 0.80, b: 0.40, a: 1.0 },
-                danger: Color { r: 0.90, g: 0.20, b: 0.20, a: 1.0 },
+                success: Color {
+                    r: 0.30,
+                    g: 0.80,
+                    b: 0.40,
+                    a: 1.0,
+                },
+                danger: Color {
+                    r: 0.90,
+                    g: 0.20,
+                    b: 0.20,
+                    a: 1.0,
+                },
             },
         )
     }
@@ -563,10 +640,24 @@ impl App {
             .map(|(&name, members)| {
                 let total_cpu = members
                     .iter()
-                    .map(|p| cpu_map.get(&(p.pid, p.start_ticks.copied())).copied().unwrap_or(0.0))
+                    .map(|p| {
+                        cpu_map
+                            .get(&(p.pid, p.start_ticks.copied()))
+                            .copied()
+                            .unwrap_or(0.0)
+                    })
                     .sum();
-                let total_rss = members.iter().map(|p| p.rss_kib.copied().unwrap_or(0)).sum();
-                (name, GroupAgg { total_cpu, total_rss })
+                let total_rss = members
+                    .iter()
+                    .map(|p| p.rss_kib.copied().unwrap_or(0))
+                    .sum();
+                (
+                    name,
+                    GroupAgg {
+                        total_cpu,
+                        total_rss,
+                    },
+                )
             })
             .collect();
 
@@ -584,7 +675,11 @@ impl App {
                     let ba = (ga.total_cpu * 2.0).round() as i32;
                     let bb = (gb.total_cpu * 2.0).round() as i32;
                     if ba != bb {
-                        if self.sort_asc { ba.cmp(&bb) } else { bb.cmp(&ba) }
+                        if self.sort_asc {
+                            ba.cmp(&bb)
+                        } else {
+                            bb.cmp(&ba)
+                        }
                     } else {
                         // Fallback to name for absolute stability
                         if self.sort_asc { a.cmp(b) } else { b.cmp(a) }
@@ -595,31 +690,71 @@ impl App {
                     let ba = ga.total_rss / 1024;
                     let bb = gb.total_rss / 1024;
                     if ba != bb {
-                        if self.sort_asc { ba.cmp(&bb) } else { bb.cmp(&ba) }
+                        if self.sort_asc {
+                            ba.cmp(&bb)
+                        } else {
+                            bb.cmp(&ba)
+                        }
                     } else {
                         if self.sort_asc { a.cmp(b) } else { b.cmp(a) }
                     }
                 }
                 SortCol::ReadRate => {
-                    let ra: f64 = group_map[a].iter().filter_map(|p| io_map.get(&(p.pid, p.start_ticks.copied())).and_then(|v| v.0)).sum();
-                    let rb: f64 = group_map[b].iter().filter_map(|p| io_map.get(&(p.pid, p.start_ticks.copied())).and_then(|v| v.0)).sum();
+                    let ra: f64 = group_map[a]
+                        .iter()
+                        .filter_map(|p| {
+                            io_map
+                                .get(&(p.pid, p.start_ticks.copied()))
+                                .and_then(|v| v.0)
+                        })
+                        .sum();
+                    let rb: f64 = group_map[b]
+                        .iter()
+                        .filter_map(|p| {
+                            io_map
+                                .get(&(p.pid, p.start_ticks.copied()))
+                                .and_then(|v| v.0)
+                        })
+                        .sum();
                     // Bucket to nearest 10 KB/s
                     let ba = (ra / 10240.0).round() as i64;
                     let bb = (rb / 10240.0).round() as i64;
                     if ba != bb {
-                        if self.sort_asc { ba.cmp(&bb) } else { bb.cmp(&ba) }
+                        if self.sort_asc {
+                            ba.cmp(&bb)
+                        } else {
+                            bb.cmp(&ba)
+                        }
                     } else {
                         if self.sort_asc { a.cmp(b) } else { b.cmp(a) }
                     }
                 }
                 SortCol::WriteRate => {
-                    let wa: f64 = group_map[a].iter().filter_map(|p| io_map.get(&(p.pid, p.start_ticks.copied())).and_then(|v| v.1)).sum();
-                    let wb: f64 = group_map[b].iter().filter_map(|p| io_map.get(&(p.pid, p.start_ticks.copied())).and_then(|v| v.1)).sum();
+                    let wa: f64 = group_map[a]
+                        .iter()
+                        .filter_map(|p| {
+                            io_map
+                                .get(&(p.pid, p.start_ticks.copied()))
+                                .and_then(|v| v.1)
+                        })
+                        .sum();
+                    let wb: f64 = group_map[b]
+                        .iter()
+                        .filter_map(|p| {
+                            io_map
+                                .get(&(p.pid, p.start_ticks.copied()))
+                                .and_then(|v| v.1)
+                        })
+                        .sum();
                     // Bucket to nearest 10 KB/s
                     let ba = (wa / 10240.0).round() as i64;
                     let bb = (wb / 10240.0).round() as i64;
                     if ba != bb {
-                        if self.sort_asc { ba.cmp(&bb) } else { bb.cmp(&ba) }
+                        if self.sort_asc {
+                            ba.cmp(&bb)
+                        } else {
+                            bb.cmp(&ba)
+                        }
                     } else {
                         if self.sort_asc { a.cmp(b) } else { b.cmp(a) }
                     }
@@ -648,8 +783,14 @@ impl App {
                 // group, regardless of the outer sort column.
                 let mut sorted_members = members.clone();
                 sorted_members.sort_by(|a, b| {
-                    let ca = cpu_map.get(&(a.pid, a.start_ticks.copied())).copied().unwrap_or(0.0);
-                    let cb = cpu_map.get(&(b.pid, b.start_ticks.copied())).copied().unwrap_or(0.0);
+                    let ca = cpu_map
+                        .get(&(a.pid, a.start_ticks.copied()))
+                        .copied()
+                        .unwrap_or(0.0);
+                    let cb = cpu_map
+                        .get(&(b.pid, b.start_ticks.copied()))
+                        .copied()
+                        .unwrap_or(0.0);
                     // Bucket CPU to nearest 0.5% for children
                     let ba = (ca * 2.0).round() as i32;
                     let bb = (cb * 2.0).round() as i32;
@@ -662,12 +803,20 @@ impl App {
                 });
 
                 for &p in &sorted_members {
-                    let cpu = cpu_map.get(&(p.pid, p.start_ticks.copied())).copied().unwrap_or(0.0);
+                    let cpu = cpu_map
+                        .get(&(p.pid, p.start_ticks.copied()))
+                        .copied()
+                        .unwrap_or(0.0);
                     let (read_rate, write_rate) = io_map
                         .get(&(p.pid, p.start_ticks.copied()))
                         .map(|&(r, w)| (r, w))
                         .unwrap_or((None, None));
-                    rows.push(DisplayRow::Child { process: p, cpu, read_rate, write_rate });
+                    rows.push(DisplayRow::Child {
+                        process: p,
+                        cpu,
+                        read_rate,
+                        write_rate,
+                    });
                 }
             }
         }
@@ -688,31 +837,47 @@ impl App {
         let cpu_map = rates(snap, self.previous.as_ref());
         let io_map = io_rates(snap, self.previous.as_ref());
         let uid = current_uid();
-        let kthreadd_kids: HashSet<u32> = snap.processes.iter()
-            .filter(|p| p.ppid.copied() == Some(2)).map(|p| p.pid).collect();
+        let kthreadd_kids: HashSet<u32> = snap
+            .processes
+            .iter()
+            .filter(|p| p.ppid.copied() == Some(2))
+            .map(|p| p.pid)
+            .collect();
         let search_lc = self.search.to_lowercase();
-        let filtered: Vec<&Process> = snap.processes.iter()
+        let filtered: Vec<&Process> = snap
+            .processes
+            .iter()
             .filter(|p| self.passes_filter(p, &kthreadd_kids, uid))
-            .filter(|p| search_lc.is_empty() || p.name.value().is_some_and(|n| n.to_lowercase().contains(&search_lc)))
+            .filter(|p| {
+                search_lc.is_empty()
+                    || p.name
+                        .value()
+                        .is_some_and(|n| n.to_lowercase().contains(&search_lc))
+            })
             .collect();
 
         let rows = self.build_display_rows(&filtered, &cpu_map, &io_map);
 
         // Collect just the PIDs of visible child rows (group headers are not
         // selectable via keyboard).
-        let pids: Vec<u32> = rows.iter().filter_map(|r| match r {
-            DisplayRow::Child { process, .. } => Some(process.pid),
-            _ => None,
-        }).collect();
+        let pids: Vec<u32> = rows
+            .iter()
+            .filter_map(|r| match r {
+                DisplayRow::Child { process, .. } => Some(process.pid),
+                _ => None,
+            })
+            .collect();
 
-        if pids.is_empty() { return; }
+        if pids.is_empty() {
+            return;
+        }
 
-        let current_idx = self.selected
+        let current_idx = self
+            .selected
             .and_then(|pid| pids.iter().position(|&p| p == pid))
             .unwrap_or(0);
 
-        let new_idx = (current_idx as i64 + delta)
-            .clamp(0, pids.len() as i64 - 1) as usize;
+        let new_idx = (current_idx as i64 + delta).clamp(0, pids.len() as i64 - 1) as usize;
 
         self.selected = Some(pids[new_idx]);
     }
@@ -738,9 +903,12 @@ impl App {
         );
 
         container(
-            row![title, text(stats).size(13).color(FG_DIM).font(Font::MONOSPACE)]
-                .spacing(28)
-                .align_y(iced::Alignment::Center),
+            row![
+                title,
+                text(stats).size(13).color(FG_DIM).font(Font::MONOSPACE)
+            ]
+            .spacing(28)
+            .align_y(iced::Alignment::Center),
         )
         .padding([10, 16])
         .width(Length::Fill)
@@ -767,7 +935,10 @@ impl App {
             .padding([5, 14])
             .style(move |_, _| button::Style {
                 background: Some(iced::Background::Color(if active { ACCENT } else { BG3 })),
-                border: iced::Border { radius: 5.0.into(), ..Default::default() },
+                border: iced::Border {
+                    radius: 5.0.into(),
+                    ..Default::default()
+                },
                 text_color: if active { BG } else { FG },
                 ..Default::default()
             })
@@ -785,7 +956,10 @@ impl App {
             .padding([5, 10])
             .style(move |_, _| button::Style {
                 background: Some(iced::Background::Color(if active { ACCENT } else { BG3 })),
-                border: iced::Border { radius: 5.0.into(), ..Default::default() },
+                border: iced::Border {
+                    radius: 5.0.into(),
+                    ..Default::default()
+                },
                 text_color: if active { BG } else { FG },
                 ..Default::default()
             })
@@ -805,7 +979,10 @@ impl App {
                 filter_btn("Apps", FilterMode::UserApps),
                 filter_btn("Mine", FilterMode::Mine),
                 iced::widget::horizontal_space(),
-                text("Interval:").size(12).font(Font::MONOSPACE).color(FG_DIM),
+                text("Interval:")
+                    .size(12)
+                    .font(Font::MONOSPACE)
+                    .color(FG_DIM),
                 speed_btn("0.5s", UpdateSpeed::High),
                 speed_btn("1s", UpdateSpeed::Normal),
                 speed_btn("3s", UpdateSpeed::Low),
@@ -833,7 +1010,11 @@ impl App {
         // Inner helper: make one header cell.
         let hdr = |label: &str, col: SortCol, w: f32| {
             let active = self.sort == col;
-            let arrow = if active { if self.sort_asc { " ▲" } else { " ▼" } } else { "" };
+            let arrow = if active {
+                if self.sort_asc { " ▲" } else { " ▼" }
+            } else {
+                ""
+            };
             button(
                 text(format!("{label}{arrow}"))
                     .size(12)
@@ -879,10 +1060,20 @@ impl App {
             .enumerate()
             .map(|(i, row)| match row {
                 // ── Group header row ──────────────────────────────────────────
-                DisplayRow::Group { name, count, total_cpu, total_rss_kib, expanded } => {
+                DisplayRow::Group {
+                    name,
+                    count,
+                    total_cpu,
+                    total_rss_kib,
+                    expanded,
+                } => {
                     let chevron = if *expanded { "▼ " } else { "▶ " };
                     // Show "(N)" count badge only when the group has >1 member.
-                    let badge = if *count > 1 { format!("  ({})", count) } else { String::new() };
+                    let badge = if *count > 1 {
+                        format!("  ({})", count)
+                    } else {
+                        String::new()
+                    };
                     let label = format!("{chevron}{name}{badge}");
 
                     let rss_mb = *total_rss_kib as f64 / 1024.0;
@@ -900,19 +1091,31 @@ impl App {
                         .color(FG_DIM)
                         .width(Length::Fixed(W_STATUS));
 
-                    let cpu_cell = heat_cell(*total_cpu, 100.0, W_CPU, format!("{:.1}%", total_cpu));
+                    let cpu_cell =
+                        heat_cell(*total_cpu, 100.0, W_CPU, format!("{:.1}%", total_cpu));
                     let mem_cell = heat_cell(rss_mb, 8192.0, W_MEM, fmt_mem(rss_mb));
 
                     let read_cell = text("—")
-                        .size(12).font(Font::MONOSPACE).color(FG_DIM)
+                        .size(12)
+                        .font(Font::MONOSPACE)
+                        .color(FG_DIM)
                         .width(Length::Fixed(W_READ));
                     let write_cell = text("—")
-                        .size(12).font(Font::MONOSPACE).color(FG_DIM)
+                        .size(12)
+                        .font(Font::MONOSPACE)
+                        .color(FG_DIM)
                         .width(Length::Fixed(W_WRITE));
 
-                    let inner = row![name_cell, status_cell, cpu_cell, mem_cell, read_cell, write_cell]
-                        .spacing(1)
-                        .align_y(iced::Alignment::Center);
+                    let inner = row![
+                        name_cell,
+                        status_cell,
+                        cpu_cell,
+                        mem_cell,
+                        read_cell,
+                        write_cell
+                    ]
+                    .spacing(1)
+                    .align_y(iced::Alignment::Center);
 
                     // Group headers are buttons that toggle expand/collapse.
                     let owned_name = name.to_string();
@@ -930,7 +1133,12 @@ impl App {
                 }
 
                 // ── Child process row ─────────────────────────────────────────
-                DisplayRow::Child { process: p, cpu, read_rate, write_rate } => {
+                DisplayRow::Child {
+                    process: p,
+                    cpu,
+                    read_rate,
+                    write_rate,
+                } => {
                     let rss_mb = p.rss_kib.copied().unwrap_or(0) as f64 / 1024.0;
                     let is_sel = selected == Some(p.pid);
 
@@ -968,16 +1176,27 @@ impl App {
                     let mem_cell = heat_cell(rss_mb, 8192.0, W_MEM, fmt_mem(rss_mb));
 
                     let read_cell = text(fmt_rate(*read_rate))
-                        .size(12).font(Font::MONOSPACE).color(FG_DIM)
+                        .size(12)
+                        .font(Font::MONOSPACE)
+                        .color(FG_DIM)
                         .width(Length::Fixed(W_READ));
                     let write_cell = text(fmt_rate(*write_rate))
-                        .size(12).font(Font::MONOSPACE).color(FG_DIM)
+                        .size(12)
+                        .font(Font::MONOSPACE)
+                        .color(FG_DIM)
                         .width(Length::Fixed(W_WRITE));
 
                     let pid = p.pid;
-                    let inner = row![name_cell, status_cell, cpu_cell, mem_cell, read_cell, write_cell]
-                        .spacing(1)
-                        .align_y(iced::Alignment::Center);
+                    let inner = row![
+                        name_cell,
+                        status_cell,
+                        cpu_cell,
+                        mem_cell,
+                        read_cell,
+                        write_cell
+                    ]
+                    .spacing(1)
+                    .align_y(iced::Alignment::Center);
 
                     button(inner)
                         .padding([4, 8])
@@ -1012,11 +1231,22 @@ impl App {
         let content: Element<'_, Message> = if let Some(pid) = self.selected {
             if let Some(p) = snap.processes.iter().find(|p| p.pid == pid) {
                 let exe = p.executable.value().map(|s| s.as_str()).unwrap_or("?");
-                let uid_str = p.uid.copied().map(|v| v.to_string()).unwrap_or_else(|| "?".into());
-                let ppid_str = p.ppid.copied().map(|v| v.to_string()).unwrap_or_else(|| "?".into());
+                let uid_str = p
+                    .uid
+                    .copied()
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "?".into());
+                let ppid_str = p
+                    .ppid
+                    .copied()
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "?".into());
                 let rss_mb = p.rss_kib.copied().unwrap_or(0) as f64 / 1024.0;
                 let (status_str, _) = process_status(p.state.copied());
-                let cpu = cpu_map.get(&(p.pid, p.start_ticks.copied())).copied().unwrap_or(0.0);
+                let cpu = cpu_map
+                    .get(&(p.pid, p.start_ticks.copied()))
+                    .copied()
+                    .unwrap_or(0.0);
                 let unit = p.systemd_unit.value().map(|s| s.as_str()).unwrap_or("—");
                 let cgroup = p.cgroup.value().map(|s| s.as_str()).unwrap_or("—");
                 let (read_r, write_r) = io_map
@@ -1146,14 +1376,14 @@ fn loading_view() -> Element<'static, Message> {
 /// | _    | Unknown           | grey |
 fn process_status(state: Option<char>) -> (&'static str, Color) {
     match state {
-        Some('R') => ("Running",  STATUS_RUNNING),
+        Some('R') => ("Running", STATUS_RUNNING),
         Some('S') => ("Sleeping", STATUS_SLEEPING),
-        Some('D') => ("Disk wait",STATUS_OTHER),
-        Some('I') => ("Idle",     STATUS_SLEEPING),
-        Some('T') => ("Stopped",  STATUS_OTHER),
-        Some('Z') => ("Zombie",   STATUS_ZOMBIE),
-        Some('X') => ("Dead",     STATUS_ZOMBIE),
-        _ =>         ("—",        STATUS_SLEEPING),
+        Some('D') => ("Disk wait", STATUS_OTHER),
+        Some('I') => ("Idle", STATUS_SLEEPING),
+        Some('T') => ("Stopped", STATUS_OTHER),
+        Some('Z') => ("Zombie", STATUS_ZOMBIE),
+        Some('X') => ("Dead", STATUS_ZOMBIE),
+        _ => ("—", STATUS_SLEEPING),
     }
 }
 
@@ -1185,9 +1415,12 @@ fn heat_cell<'a>(value: f64, max: f64, width: f32, label: String) -> Element<'a,
     // We use a Canvas to draw the heat bar rectangle behind the text.
     // The canvas is fixed-size and layered using a `container` → `stack`
     // approach: canvas goes first (background), text goes on top.
-    let bar = canvas(HeatBar { frac, color: bar_color })
-        .width(Length::Fixed(width))
-        .height(Length::Fixed(22.0));
+    let bar = canvas(HeatBar {
+        frac,
+        color: bar_color,
+    })
+    .width(Length::Fixed(width))
+    .height(Length::Fixed(22.0));
 
     // Overlay the text label centered in the same space.
     let label_widget = text(label)
@@ -1197,9 +1430,14 @@ fn heat_cell<'a>(value: f64, max: f64, width: f32, label: String) -> Element<'a,
         .width(Length::Fixed(width));
 
     // Use iced's built-in `stack` to layer bar behind label.
-    iced::widget::stack![bar, container(label_widget).padding([3, 8]).center_y(Length::Fixed(22.0))]
-        .width(Length::Fixed(width))
-        .into()
+    iced::widget::stack![
+        bar,
+        container(label_widget)
+            .padding([3, 8])
+            .center_y(Length::Fixed(22.0))
+    ]
+    .width(Length::Fixed(width))
+    .into()
 }
 
 /// A custom Iced `Program` (canvas geometry) for the heat bar.
@@ -1247,16 +1485,61 @@ fn is_kernel_thread_name(name: &str) -> bool {
     // These are *prefix* patterns — a process whose name starts with any of
     // these strings is considered a kernel thread.
     const PREFIXES: &[&str] = &[
-        "kworker/", "kthread", "ksoftirqd", "migration/", "idle_inject/",
-        "rcu_", "rcub/", "rcuc/", "kswapd", "kcompactd", "khugepaged",
-        "kdevtmpfs", "netns", "kauditd", "khungtaskd", "oom_reaper",
-        "writeback", "kblockd", "blkcg_punt_bio", "edac-poller", "devfreq_wq",
-        "watchdogd", "watchdog/", "irq/", "i915", "nouveau", "amdgpu",
-        "jbd2/", "ext4-", "xfs-", "btrfs", "cryptd", "zswap-", "dm-",
-        "hwrng", "acpi_thermal_pm", "ipv6_addrconf", "nfsiod", "scsi_",
-        "usb-storage", "cfg80211", "rpciod", "xprtiod", "pool_workqueue",
-        "nvme-wq", "nvme-reset-wq", "nvme-delete-wq", "mld", "inet_frag_wq",
-        "bioset", "ttm", "drm_sched", "drm-", "card", "md",
+        "kworker/",
+        "kthread",
+        "ksoftirqd",
+        "migration/",
+        "idle_inject/",
+        "rcu_",
+        "rcub/",
+        "rcuc/",
+        "kswapd",
+        "kcompactd",
+        "khugepaged",
+        "kdevtmpfs",
+        "netns",
+        "kauditd",
+        "khungtaskd",
+        "oom_reaper",
+        "writeback",
+        "kblockd",
+        "blkcg_punt_bio",
+        "edac-poller",
+        "devfreq_wq",
+        "watchdogd",
+        "watchdog/",
+        "irq/",
+        "i915",
+        "nouveau",
+        "amdgpu",
+        "jbd2/",
+        "ext4-",
+        "xfs-",
+        "btrfs",
+        "cryptd",
+        "zswap-",
+        "dm-",
+        "hwrng",
+        "acpi_thermal_pm",
+        "ipv6_addrconf",
+        "nfsiod",
+        "scsi_",
+        "usb-storage",
+        "cfg80211",
+        "rpciod",
+        "xprtiod",
+        "pool_workqueue",
+        "nvme-wq",
+        "nvme-reset-wq",
+        "nvme-delete-wq",
+        "mld",
+        "inet_frag_wq",
+        "bioset",
+        "ttm",
+        "drm_sched",
+        "drm-",
+        "card",
+        "md",
     ];
     // These are *exact* names — used for short names that would incorrectly
     // match as prefixes of legitimate user-space processes.
@@ -1326,4 +1609,3 @@ pub fn run() -> iced::Result {
         .window_size((980.0, 680.0))
         .run_with(App::new)
 }
-
