@@ -1241,8 +1241,8 @@ impl<Message> canvas::Program<Message> for HeatBar {
 /// Returns `true` if the given process short name belongs to a kernel thread.
 ///
 /// We match both prefix patterns (e.g. `"kworker/"`) and exact names
-/// (e.g. `"kthreadd"`).  This list is comprehensive for a modern Linux 6.x
-/// kernel running on x86-64 with common storage and GPU drivers.
+/// (e.g. `"kthreadd"`). This is a heuristic, not a complete list of kernel
+/// thread names; names and drivers vary across systems, including Linux 7.x.
 fn is_kernel_thread_name(name: &str) -> bool {
     // These are *prefix* patterns — a process whose name starts with any of
     // these strings is considered a kernel thread.
@@ -1326,3 +1326,4 @@ pub fn run() -> iced::Result {
         .window_size((980.0, 680.0))
         .run_with(App::new)
 }
+
