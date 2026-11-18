@@ -26,7 +26,8 @@ unsafe extern "C" {
     fn bind(fd: c_int, address: *const SockAddrNl, length: u32) -> c_int;
     fn send(fd: c_int, buffer: *const c_void, length: usize, flags: c_int) -> isize;
     fn recv(fd: c_int, buffer: *mut c_void, length: usize, flags: c_int) -> isize;
-    fn setsockopt(fd: c_int, level: c_int, name: c_int, value: *const c_void, length: u32) -> c_int;
+    fn setsockopt(fd: c_int, level: c_int, name: c_int, value: *const c_void, length: u32)
+    -> c_int;
     fn close(fd: c_int) -> c_int;
     fn getpid() -> c_int;
 }
