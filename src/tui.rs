@@ -1,3 +1,10 @@
+// Program: whats_running - tui.rs
+// Programmer: Ethan-da-Tech-Wizard (written with Claude, an AI assistant)
+// Last Modified: 2026-11-18
+// Purpose: Implements the interactive terminal interface with process, services, network, system and event views, built on raw terminal escape codes and stty.
+// ---------------------------------------------------------------------------
+// Imports
+// ---------------------------------------------------------------------------
 use crate::activity::{self, Inventory};
 use crate::procfs::{Process, Snapshot, collect_snapshot};
 use crate::{field_display, io_rates, mib, rates, sanitize, truncate, used};
@@ -10,6 +17,10 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+// ---------------------------------------------------------------------------
+// UI state types
+// ---------------------------------------------------------------------------
+/// Column the process list is sorted by.
 #[derive(Clone, Copy)]
 enum Sort {
     Cpu,
@@ -17,6 +28,7 @@ enum Sort {
     Pid,
     Name,
 }
+/// Which processes are shown in the process view.
 #[derive(Clone, Copy)]
 enum Filter {
     All,
@@ -24,6 +36,7 @@ enum Filter {
     Mine,
     Problems,
 }
+/// Which screen is currently displayed; the `v` key cycles through them.
 #[derive(Clone, Copy)]
 enum View {
     Processes,
@@ -32,16 +45,26 @@ enum View {
     System,
     Events,
 }
+// ---------------------------------------------------------------------------
+// Signal handling and terminal setup
+// ---------------------------------------------------------------------------
+// Set by the signal handler so the main loop can exit cleanly.
 static TERMINATE: AtomicBool = AtomicBool::new(false);
+// The C `signal` function, used to catch hangup, interrupt and terminate.
 unsafe extern "C" {
     fn signal(number: i32, handler: extern "C" fn(i32)) -> usize;
 }
+/// Signal handler: only sets a flag, which is the safe thing to do in a handler.
 extern "C" fn terminate(_: i32) {
     TERMINATE.store(true, Ordering::Relaxed);
 }
 
+/// Guard that puts the terminal in raw mode and restores the saved settings
+/// when dropped, even on early return.
 struct Terminal(String);
 impl Terminal {
+    /// Saves the current terminal settings, switches to raw mode with the
+    /// alternate screen and hidden cursor. Fails if not run in a real terminal.
     fn enter() -> io::Result<Self> {
         if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
             return Err(io::Error::other("--tui requires an interactive terminal"));
@@ -54,6 +77,7 @@ impl Terminal {
     }
 }
 impl Drop for Terminal {
+    // Restore the saved settings, show the cursor and leave the alternate screen.
     fn drop(&mut self) {
         let _ = stty(&[self.0.trim()]);
         print!("\x1b[?25h\x1b[?1049l");
@@ -61,13 +85,22 @@ impl Drop for Terminal {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Main loop
+// ---------------------------------------------------------------------------
+/// Runs the interactive interface until the user quits or a signal arrives.
+/// Each pass takes a fresh snapshot, redraws, then waits for a key or the
+/// refresh interval.
 pub fn run(interval_ms: u64, show_command: bool, event_limit: Option<usize>) -> io::Result<()> {
     let _terminal = Terminal::enter()?;
     unsafe {
+        // Route hangup (1), interrupt (2) and terminate (15) to the flag handler.
         signal(1, terminate);
         signal(2, terminate);
         signal(15, terminate);
     }
+    // Read keyboard bytes on a helper thread and pass them over a channel so the
+    // main loop can wait with a timeout.
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         for byte in io::stdin().lock().bytes().flatten() {
@@ -76,12 +109,16 @@ pub fn run(interval_ms: u64, show_command: bool, event_limit: Option<usize>) -> 
             }
         }
     });
+    // UI state: previous snapshot (for rates), selected row, sort, filter, tree
+    // mode and details panel.
     let (mut previous, mut selected, mut sort, mut filter, mut tree, mut details) =
         (None, 0, Sort::Cpu, Filter::UserApps, false, true);
     let mut view = View::Processes;
+    // The inventory is slow to collect, so it is cached until `r` is pressed.
     let mut inventory_cache = None;
     let mut search = String::new();
     let mut editing = false;
+    // If event capture was requested, run it once on a background thread.
     let (event_tx, event_rx) = mpsc::channel();
     if let Some(limit) = event_limit {
         thread::spawn(move || {
@@ -98,6 +135,8 @@ pub fn run(interval_ms: u64, show_command: bool, event_limit: Option<usize>) -> 
         if let Ok(result) = event_rx.try_recv() {
             event_result = Some(result)
         }
+        // Collect a new snapshot, load the inventory only for views that need it,
+        // then draw the screen.
         let snapshot = collect_snapshot(show_command)?;
         if !matches!(view, View::Processes | View::Events) && inventory_cache.is_none() {
             inventory_cache = Some(activity::collect(&snapshot));
@@ -118,6 +157,9 @@ pub fn run(interval_ms: u64, show_command: bool, event_limit: Option<usize>) -> 
             event_result.as_ref(),
         )?;
         previous = Some(snapshot);
+        // Wait for a key (at least 100 ms) and apply it; a timeout just refreshes.
+        // While editing, keys build the search text: Enter accepts, Escape clears,
+        // Backspace (127) deletes.
         match rx.recv_timeout(Duration::from_millis(interval_ms.max(100))) {
             Ok(byte) if editing => match byte {
                 b'\n' | b'\r' => editing = false,
@@ -131,6 +173,8 @@ pub fn run(interval_ms: u64, show_command: bool, event_limit: Option<usize>) -> 
                 value if value.is_ascii_graphic() || value == b' ' => search.push(value as char),
                 _ => {}
             },
+            // q or Ctrl-C quits; j/k move the selection; s, f, t, d, v, r and / change
+            // sort, filter, tree, details, view, refresh and search.
             Ok(b'q' | 3) => break,
             Ok(b'j') => selected += 1,
             Ok(b'k') => selected = selected.saturating_sub(1),
@@ -172,10 +216,16 @@ pub fn run(interval_ms: u64, show_command: bool, event_limit: Option<usize>) -> 
     Ok(())
 }
 
+// Draw takes many explicit state values on purpose to keep the loop simple.
 #[expect(
     clippy::too_many_arguments,
     reason = "explicit immutable UI state keeps the KISS loop local"
 )]
+// ---------------------------------------------------------------------------
+// Drawing
+// ---------------------------------------------------------------------------
+/// Renders one full screen into a string and prints it, trimmed to the
+/// terminal height.
 fn draw(
     s: &Snapshot,
     previous: Option<&Snapshot>,
@@ -189,6 +239,7 @@ fn draw(
     search: &str,
     event_result: Option<&Result<crate::events::Capture, String>>,
 ) -> io::Result<()> {
+    // Ask the terminal for its size, defaulting to 24 rows by 80 columns.
     let size = stty_output(&["size"]).unwrap_or_else(|_| "24 80".into());
     let mut size = size.split_whitespace();
     let rows: usize = size.next().and_then(|v| v.parse().ok()).unwrap_or(24);
@@ -196,17 +247,21 @@ fn draw(
     let cpu = rates(s, previous);
     let io_rates = io_rates(s, previous);
     let uid = current_uid();
+    // Collect pids that are direct children of the kernel thread parent (pid 2).
     let kthreadd_children: std::collections::HashSet<u32> = s
         .processes
         .iter()
         .filter(|p| p.ppid.copied() == Some(2))
         .map(|p| p.pid)
         .collect();
+    // Build the visible process list by applying the chosen filter, then the
+    // search text.
     let mut list: Vec<&Process> = s
         .processes
         .iter()
         .filter(|p| match filter {
             Filter::All => true,
+            // "User apps" hides kernel threads and kernel worker names by prefix.
             Filter::UserApps => {
                 // Exclude PID 2 (kthreadd) itself and all its direct children (kernel threads)
                 // Also exclude PID 0 (idle) and any process whose name looks like a kernel worker
@@ -274,6 +329,8 @@ fn draw(
                     && !name.starts_with("drm_sched")
                     && !name.starts_with("drm-")
             }
+            // "Mine" shows only the current user's processes; "Problems" shows those
+            // with unreadable fields.
             Filter::Mine => p.uid.copied() == uid,
             Filter::Problems => p.visibility_summary() != "complete",
         })
@@ -287,6 +344,7 @@ fn draw(
                     .is_some_and(|value| value.to_lowercase().contains(&search.to_lowercase()))
         })
         .collect();
+    // Order the list as a parent/child tree, or sort it by the chosen column.
     if tree {
         list = tree_order(list);
     } else {
@@ -303,6 +361,7 @@ fn draw(
             Sort::Name => list.sort_by_key(|p| p.name.value().cloned().unwrap_or_default()),
         }
     }
+    // Keep the selection in range and compute the visible page of rows.
     let selected = selected.min(list.len().saturating_sub(1));
     let page = rows.saturating_sub(if details { 10 } else { 6 }).max(1);
     let start = selected.saturating_sub(page - 1);
@@ -312,6 +371,7 @@ fn draw(
         .filter_map(|p| p.ppid.copied().map(|v| (p.pid, v)))
         .collect();
     let known: HashSet<_> = s.processes.iter().map(|p| p.pid).collect();
+    // Assemble the screen text: title line, memory line, key help, then the body.
     let mut out = format!(
         "\x1b[H\x1b[2JWhat's Running?  Arch + Hyprland  view={} self={}  processes={}  collection={:.2}ms\n",
         match view {
@@ -340,6 +400,8 @@ fn draw(
     out.push_str(&format!(
         "{bar}\nv views   / search   t tree   s sort   f filter   r refresh   j/k select   d details   q quit\n{bar}\n"
     ));
+    // Body for the services, network and system views, drawn from the cached
+    // inventory.
     if let Some(inventory) = inventory {
         match view {
             View::Services => {
@@ -429,6 +491,7 @@ fn draw(
             _ => {}
         }
     } else if matches!(view, View::Events) {
+        // Body for the events view.
         match event_result {
             None => out.push_str("\nEVENT COLLECTOR: not enabled (launch with --tui --events N)\n"),
             Some(Err(error)) => out.push_str(&format!(
@@ -447,6 +510,8 @@ fn draw(
             }
         }
     } else {
+        // Body for the process view: one row per process with CPU, memory and I/O
+        // rates, plus an optional detail panel for the selected process.
         out.push_str("  PID    CPU%   RSS MiB   READ/s  WRITE/s NAME\n");
         for (index, p) in list.iter().enumerate().skip(start).take(page) {
             let ios = io_rates
@@ -485,6 +550,7 @@ fn draw(
             out.push_str(&format!("\nDETAIL (command may contain secrets)\nPID={} PPID={:?} UID={:?} state={:?} start={:?}\nexe={}\ncommand={}\nvisibility={}\n",p.pid,p.ppid,p.uid,p.state,p.start_ticks,sanitize(&field_display(&p.executable)),sanitize(&field_display(&p.command)),p.visibility_summary()));
         }
     }
+    // Print at most `rows` lines, clearing the rest of each line.
     print!(
         "{}",
         out.lines()
@@ -494,18 +560,24 @@ fn draw(
     );
     io::stdout().flush()
 }
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+/// Shows the number of items in a list field, or its status if unavailable.
 fn field_count<T>(field: &crate::procfs::Field<Vec<T>>) -> String {
     match field {
         crate::procfs::Field::Value(values) => values.len().to_string(),
         other => format!("<{}>", other.status()),
     }
 }
+/// Shows a field's value, or its status if unavailable.
 fn field_value<T: std::fmt::Display>(field: &crate::procfs::Field<T>) -> String {
     match field {
         crate::procfs::Field::Value(value) => value.to_string(),
         other => format!("<{}>", other.status()),
     }
 }
+/// Counts ancestors of `pid` among known processes, stopping on cycles.
 fn depth(mut pid: u32, p: &HashMap<u32, u32>, known: &HashSet<u32>) -> usize {
     let (mut d, mut seen) = (0, HashSet::new());
     while let Some(parent) = p.get(&pid) {
@@ -517,6 +589,7 @@ fn depth(mut pid: u32, p: &HashMap<u32, u32>, known: &HashSet<u32>) -> usize {
     }
     d
 }
+/// Reorders processes so each parent is followed by its children (depth first).
 fn tree_order(list: Vec<&Process>) -> Vec<&Process> {
     let ids: HashSet<_> = list.iter().map(|p| p.pid).collect();
     let mut children: HashMap<u32, Vec<&Process>> = HashMap::new();
@@ -532,6 +605,7 @@ fn tree_order(list: Vec<&Process>) -> Vec<&Process> {
     for values in children.values_mut() {
         values.sort_by_key(|p| p.pid)
     }
+    /// Adds a process and then its children; the seen set prevents loops.
     fn visit<'a>(
         p: &'a Process,
         c: &mut HashMap<u32, Vec<&'a Process>>,
@@ -560,6 +634,7 @@ fn tree_order(list: Vec<&Process>) -> Vec<&Process> {
     }
     out
 }
+/// Formats a bytes-per-second rate with a K or M suffix.
 fn rate(v: f64) -> String {
     if v >= 1_048_576.0 {
         format!("{:.1}M", v / 1_048_576.0)
@@ -569,6 +644,7 @@ fn rate(v: f64) -> String {
         format!("{v:.0}")
     }
 }
+/// Display name for a sort mode.
 fn sort_name(v: Sort) -> &'static str {
     match v {
         Sort::Cpu => "cpu",
@@ -577,6 +653,7 @@ fn sort_name(v: Sort) -> &'static str {
         Sort::Name => "name",
     }
 }
+/// Display name for a filter mode.
 fn filter_name(v: Filter) -> &'static str {
     match v {
         Filter::All => "all",
@@ -585,6 +662,7 @@ fn filter_name(v: Filter) -> &'static str {
         Filter::Problems => "problems",
     }
 }
+/// Reads this process's user id from its own status file.
 fn current_uid() -> Option<u32> {
     std::fs::read_to_string("/proc/self/status")
         .ok()?
@@ -595,6 +673,7 @@ fn current_uid() -> Option<u32> {
         .parse()
         .ok()
 }
+/// Runs `stty` with the given arguments and returns its output.
 fn stty_output(args: &[&str]) -> io::Result<String> {
     let o = Command::new("stty")
         .args(args)
@@ -606,6 +685,7 @@ fn stty_output(args: &[&str]) -> io::Result<String> {
         Err(io::Error::other("stty failed"))
     }
 }
+/// Runs `stty` with the given arguments, succeeding only if it exits cleanly.
 fn stty(args: &[&str]) -> io::Result<()> {
     if Command::new("stty").args(args).status()?.success() {
         Ok(())
@@ -614,6 +694,9 @@ fn stty(args: &[&str]) -> io::Result<()> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,3 +1,7 @@
+// Program: whats_running - gui.rs
+// Programmer: Ethan-da-Tech-Wizard (written with Claude, an AI assistant)
+// Last Modified: 2026-11-18
+// Purpose: Implements the native desktop window (Iced GUI) that shows grouped, sortable, filterable process lists with live CPU, memory and I/O figures.
 //! # gui — Iced native-window frontend for *What's Running?*
 //!
 //! This module implements the full desktop GUI using the [Iced] framework
@@ -633,6 +637,7 @@ impl App {
 
         // ── Step 2: compute per-group aggregate values ────────────────────────
         // (total_cpu, total_rss, min_status_priority) for sorting.
+        /// Totals for one process group, used only to order the groups.
         struct GroupAgg {
             total_cpu: f64,
             total_rss: u64,
@@ -1453,9 +1458,13 @@ struct HeatBar {
     color: Color,
 }
 
+// Lets the heat bar be drawn on an Iced canvas.
 impl<Message> canvas::Program<Message> for HeatBar {
+    // The bar has no interactive state of its own.
     type State = ();
 
+    /// Draws the bar: a filled rectangle covering `frac` of the width; the rest
+    /// stays transparent.
     fn draw(
         &self,
         _state: &(),

@@ -1,8 +1,20 @@
+// Program: whats_running - procfs.rs
+// Programmer: Ethan-da-Tech-Wizard (written with Claude, an AI assistant)
+// Last Modified: 2026-11-18
+// Purpose: Reads process, thread, memory and CPU data from /proc into typed snapshots where every field records why it may be missing.
+// ---------------------------------------------------------------------------
+// Imports
+// ---------------------------------------------------------------------------
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+// ---------------------------------------------------------------------------
+// Data types
+// ---------------------------------------------------------------------------
+/// A value that may be unavailable; the non-Value variants say why, so
+/// missing data is never confused with zero.
 #[derive(Debug, Clone)]
 pub enum Field<T> {
     Value(T),
@@ -15,6 +27,7 @@ pub enum Field<T> {
 }
 
 impl<T> Field<T> {
+    /// Short machine-readable name of this variant.
     pub fn status(&self) -> &'static str {
         match self {
             Self::Value(_) => "value",
@@ -27,6 +40,7 @@ impl<T> Field<T> {
         }
     }
 
+    /// Returns the value if present.
     pub fn value(&self) -> Option<&T> {
         match self {
             Self::Value(value) => Some(value),
@@ -35,11 +49,13 @@ impl<T> Field<T> {
     }
 }
 impl<T: Copy> Field<T> {
+    /// Returns a copy of the value if present.
     pub fn copied(&self) -> Option<T> {
         self.value().copied()
     }
 }
 
+/// Everything read about one process; each field is independently optional.
 #[derive(Debug)]
 pub struct Process {
     pub pid: u32,
@@ -62,6 +78,7 @@ pub struct Process {
     pub namespaces: Field<Vec<(String, String)>>,
 }
 
+/// Per-thread data from a process's task directory.
 #[derive(Debug)]
 pub struct Thread {
     pub tid: u32,
@@ -73,6 +90,7 @@ pub struct Thread {
 }
 
 impl Process {
+    /// Summarizes which key fields could not be read, or "complete".
     pub fn visibility_summary(&self) -> String {
         let fields = [
             ("name", &self.name),
@@ -93,6 +111,7 @@ impl Process {
     }
 }
 
+/// A point-in-time view of all processes plus system CPU and memory totals.
 pub struct Snapshot {
     pub observer_pid: u32,
     pub started_unix_ms: u128,
@@ -104,6 +123,7 @@ pub struct Snapshot {
     pub memory: Memory,
 }
 
+/// System memory figures in KiB (None when not reported).
 #[derive(Debug, Default)]
 pub struct Memory {
     pub total_kib: Option<u64>,
@@ -112,10 +132,17 @@ pub struct Memory {
     pub swap_free_kib: Option<u64>,
 }
 
+// ---------------------------------------------------------------------------
+// Collection
+// ---------------------------------------------------------------------------
+/// Takes a snapshot of the live /proc tree. Command lines are read only when
+/// `collect_commands` is true, since they can contain sensitive text.
 pub fn collect_snapshot(collect_commands: bool) -> io::Result<Snapshot> {
     collect_from(Path::new("/proc"), std::process::id(), collect_commands)
 }
 
+/// Does the actual collection from `root` (a parameter so tests can use a
+/// fake proc tree).
 fn collect_from(root: &Path, observer_pid: u32, collect_commands: bool) -> io::Result<Snapshot> {
     let timer = Instant::now();
     let started_unix_ms = SystemTime::now()
@@ -125,6 +152,7 @@ fn collect_from(root: &Path, observer_pid: u32, collect_commands: bool) -> io::R
     let mut processes = Vec::new();
     let mut enumeration_errors = 0;
 
+    // Numeric directory names are process ids; skip everything else.
     for entry in fs::read_dir(root)? {
         let entry = match entry {
             Ok(entry) => entry,
@@ -142,6 +170,7 @@ fn collect_from(root: &Path, observer_pid: u32, collect_commands: bool) -> io::R
         };
         processes.push(read_process(root, pid, collect_commands));
     }
+    // Sort by pid for stable output, then read system-wide CPU and memory.
     processes.sort_unstable_by_key(|process| process.pid);
     let system_stat = read_bytes(root.join("stat"));
     let (system_cpu_ticks, cpu_count) = system_stat
@@ -165,6 +194,8 @@ fn collect_from(root: &Path, observer_pid: u32, collect_commands: bool) -> io::R
     })
 }
 
+/// Reads every available file for one process. Processes can exit mid-read,
+/// so failures become Field statuses rather than errors.
 fn read_process(root: &Path, pid: u32, collect_commands: bool) -> Process {
     let directory = root.join(pid.to_string());
     let stat = read_bytes(directory.join("stat"));
@@ -173,6 +204,7 @@ fn read_process(root: &Path, pid: u32, collect_commands: bool) -> Process {
         Some(stat) => Field::Value(stat.name.clone()),
         None => map_failure(&stat),
     };
+    // Command lines are only read when explicitly requested.
     let command = if collect_commands {
         read_bytes(directory.join("cmdline")).map(|bytes| parse_cmdline(&bytes))
     } else {
@@ -190,6 +222,7 @@ fn read_process(root: &Path, pid: u32, collect_commands: bool) -> Process {
     let write_bytes = parsed_number(&io, b"write_bytes:");
     let thread_count = parsed_number(&status, b"Threads:");
     let cgroup = read_bytes(directory.join("cgroup")).map(|bytes| parse_cgroup(&bytes));
+    // Derive the systemd unit name from the cgroup path.
     let systemd_unit = match &cgroup {
         Field::Value(path) => match find_systemd_unit(path) {
             Some(unit) => Field::Value(unit),
@@ -238,6 +271,7 @@ fn read_process(root: &Path, pid: u32, collect_commands: bool) -> Process {
 }
 
 impl<T> Field<T> {
+    /// Transforms the value if present, keeping any failure status unchanged.
     pub fn map<U>(self, convert: impl FnOnce(T) -> U) -> Field<U> {
         match self {
             Self::Value(value) => Field::Value(convert(value)),
@@ -251,6 +285,10 @@ impl<T> Field<T> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// File reading helpers
+// ---------------------------------------------------------------------------
+/// Reads a whole file, converting errors to a Field status.
 fn read_bytes(path: PathBuf) -> Field<Vec<u8>> {
     match fs::read(path) {
         Ok(value) => Field::Value(value),
@@ -258,6 +296,8 @@ fn read_bytes(path: PathBuf) -> Field<Vec<u8>> {
     }
 }
 
+/// Maps an I/O error to the matching Field status (a missing file means the
+/// process vanished).
 fn field_error<T>(error: io::Error) -> Field<T> {
     match error.kind() {
         io::ErrorKind::PermissionDenied => Field::PermissionDenied,
@@ -267,6 +307,8 @@ fn field_error<T>(error: io::Error) -> Field<T> {
     }
 }
 
+/// Carries a failure status over to a different type; a present value that
+/// failed to parse becomes ParseError.
 fn map_failure<T, U>(field: &Field<T>) -> Field<U> {
     match field {
         Field::Value(_) => Field::ParseError,
@@ -279,6 +321,7 @@ fn map_failure<T, U>(field: &Field<T>) -> Field<U> {
     }
 }
 
+/// Extracts a numeric "Key: value" entry from file contents already read.
 fn parsed_number(source: &Field<Vec<u8>>, key: &[u8]) -> Field<u64> {
     match source {
         Field::Value(bytes) => parse_status_number(bytes, key)
@@ -288,6 +331,7 @@ fn parsed_number(source: &Field<Vec<u8>>, key: &[u8]) -> Field<u64> {
     }
 }
 
+/// Reads each thread's stat file under the process's task directory.
 fn read_threads(process: &Path) -> Field<Vec<Thread>> {
     let entries = match fs::read_dir(process.join("task")) {
         Ok(v) => v,
@@ -320,6 +364,7 @@ fn read_threads(process: &Path) -> Field<Vec<Thread>> {
     threads.sort_unstable_by_key(|thread| thread.tid);
     Field::Value(threads)
 }
+/// Reads the namespace links (pid, mnt, net, user, cgroup) for a process.
 fn read_namespaces(process: &Path) -> Field<Vec<(String, String)>> {
     let mut values = Vec::new();
     for name in ["pid", "mnt", "net", "user", "cgroup"] {
@@ -335,6 +380,10 @@ fn read_namespaces(process: &Path) -> Field<Vec<(String, String)>> {
     Field::Value(values)
 }
 
+// ---------------------------------------------------------------------------
+// Parsers
+// ---------------------------------------------------------------------------
+/// The subset of /proc/<pid>/stat that this program uses.
 struct ParsedStat {
     name: String,
     state: char,
@@ -344,6 +393,8 @@ struct ParsedStat {
     start_ticks: u64,
 }
 
+/// Parses a stat line. The name sits in parentheses and may itself contain
+/// spaces or parentheses, so the first "(" and last ")" delimit it.
 fn parse_stat(bytes: &[u8]) -> Option<ParsedStat> {
     let open = bytes.iter().position(|byte| *byte == b'(')?;
     let close = bytes.iter().rposition(|byte| *byte == b')')?;
@@ -363,6 +414,7 @@ fn parse_stat(bytes: &[u8]) -> Option<ParsedStat> {
     })
 }
 
+/// Turns NUL-separated arguments into one space-joined string.
 fn parse_cmdline(bytes: &[u8]) -> String {
     let arguments: Vec<String> = bytes
         .split(|byte| *byte == 0)
@@ -376,6 +428,7 @@ fn parse_cmdline(bytes: &[u8]) -> String {
     }
 }
 
+/// Finds the line starting with `key` and parses its first number.
 fn parse_status_number(bytes: &[u8], key: &[u8]) -> Option<u64> {
     bytes
         .split(|byte| *byte == b'\n')
@@ -385,6 +438,8 @@ fn parse_status_number(bytes: &[u8], key: &[u8]) -> Option<u64> {
         .and_then(|value| value.parse().ok())
 }
 
+/// Returns total CPU ticks from the aggregate "cpu" line and the number of
+/// per-CPU lines.
 fn parse_system_cpu(bytes: &[u8]) -> (Option<u64>, usize) {
     let mut total = None;
     let mut count = 0;
@@ -404,6 +459,7 @@ fn parse_system_cpu(bytes: &[u8]) -> (Option<u64>, usize) {
     (total, count)
 }
 
+/// Reads memory and swap totals from meminfo contents.
 fn parse_memory(bytes: &[u8]) -> Memory {
     Memory {
         total_kib: parse_status_number(bytes, b"MemTotal:"),
@@ -413,6 +469,7 @@ fn parse_memory(bytes: &[u8]) -> Memory {
     }
 }
 
+/// Returns the path portion of the first cgroup line.
 fn parse_cgroup(bytes: &[u8]) -> String {
     bytes
         .split(|byte| *byte == b'\n')
@@ -421,6 +478,7 @@ fn parse_cgroup(bytes: &[u8]) -> String {
         .unwrap_or_default()
 }
 
+/// Finds the innermost .service, .scope or .slice name in a cgroup path.
 fn find_systemd_unit(path: &str) -> Option<String> {
     path.split('/')
         .rev()
@@ -432,6 +490,9 @@ fn find_systemd_unit(path: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 #[cfg(test)]
 mod tests {
     use super::*;

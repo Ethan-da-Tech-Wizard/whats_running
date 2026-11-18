@@ -1,9 +1,20 @@
+// Program: whats_running - activity.rs
+// Programmer: Ethan-da-Tech-Wizard (written with Claude, an AI assistant)
+// Last Modified: 2026-11-18
+// Purpose: Collects a background-activity inventory (sockets, mounts, cgroups, systemd units and timers) from /proc, /sys and systemctl.
+// ---------------------------------------------------------------------------
+// Imports
+// ---------------------------------------------------------------------------
 use crate::procfs::{Field, Snapshot};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+// ---------------------------------------------------------------------------
+// Data types
+// ---------------------------------------------------------------------------
+/// One network or unix socket read from the kernel tables.
 #[derive(Debug)]
 pub struct SocketRecord {
     pub protocol: &'static str,
@@ -14,12 +25,15 @@ pub struct SocketRecord {
     pub path: Option<String>,
     pub owners: Vec<u32>,
 }
+/// One mounted filesystem from the mount table.
 #[derive(Debug)]
 pub struct MountRecord {
     pub mount_point: String,
     pub fs_type: String,
     pub source: String,
 }
+/// Everything gathered about background activity; each part records whether it
+/// could be read.
 #[derive(Debug)]
 pub struct Inventory {
     pub sockets: Field<Vec<SocketRecord>>,
@@ -33,7 +47,12 @@ pub struct Inventory {
     pub user_timers: Field<Vec<String>>,
 }
 
+// ---------------------------------------------------------------------------
+// Collection
+// ---------------------------------------------------------------------------
+/// Builds the full inventory from the given process snapshot.
 pub fn collect(snapshot: &Snapshot) -> Inventory {
+    // Gather the distinct systemd units that running processes belong to.
     let mut units: Vec<String> = snapshot
         .processes
         .iter()
@@ -47,6 +66,8 @@ pub fn collect(snapshot: &Snapshot) -> Inventory {
         cgroup_count: count_cgroups(Path::new("/sys/fs/cgroup")),
         cgroups: list_cgroups(Path::new("/sys/fs/cgroup")),
         units,
+        // Ask systemctl for running services/scopes and for timers, for both the
+        // system and the user manager.
         system_units: systemd_lines(&[
             "list-units",
             "--all",
@@ -85,6 +106,7 @@ pub fn collect(snapshot: &Snapshot) -> Inventory {
         ]),
     }
 }
+/// Reads TCP, UDP and unix socket tables and attaches owning process ids.
 fn collect_sockets(snapshot: &Snapshot) -> Field<Vec<SocketRecord>> {
     let mut all = Vec::new();
     for (protocol, path) in [
@@ -110,6 +132,7 @@ fn collect_sockets(snapshot: &Snapshot) -> Field<Vec<SocketRecord>> {
     }
     Field::Value(all)
 }
+/// Reads a file, mapping I/O errors onto a Field status.
 fn read_bytes(path: &str) -> Field<Vec<u8>> {
     match fs::read(path) {
         Ok(v) => Field::Value(v),
@@ -120,6 +143,7 @@ fn read_bytes(path: &str) -> Field<Vec<u8>> {
         },
     }
 }
+/// Converts a non-value Field of one type into the same status for another type.
 fn failure<T, U>(field: Field<T>) -> Field<U> {
     match field {
         Field::Value(_) => Field::ParseError,
@@ -131,6 +155,7 @@ fn failure<T, U>(field: Field<T>) -> Field<U> {
         Field::IoError => Field::IoError,
     }
 }
+/// Parses a /proc/net/tcp or udp style table (first line is a header).
 fn parse_inet(protocol: &'static str, bytes: &[u8]) -> Vec<SocketRecord> {
     String::from_utf8_lossy(bytes)
         .lines()
@@ -149,6 +174,7 @@ fn parse_inet(protocol: &'static str, bytes: &[u8]) -> Vec<SocketRecord> {
         })
         .collect()
 }
+/// Parses the unix socket table.
 fn parse_unix(bytes: &[u8]) -> Vec<SocketRecord> {
     String::from_utf8_lossy(bytes)
         .lines()
@@ -167,6 +193,7 @@ fn parse_unix(bytes: &[u8]) -> Vec<SocketRecord> {
         })
         .collect()
 }
+/// Parses mountinfo lines; the fields after a lone "-" give type and source.
 fn parse_mounts(bytes: &[u8]) -> Vec<MountRecord> {
     String::from_utf8_lossy(bytes)
         .lines()
@@ -181,6 +208,7 @@ fn parse_mounts(bytes: &[u8]) -> Vec<MountRecord> {
         })
         .collect()
 }
+/// Decodes the octal escapes the kernel uses for space, tab, newline and backslash.
 fn unescape(value: &str) -> String {
     value
         .replace("\\040", " ")
@@ -188,6 +216,7 @@ fn unescape(value: &str) -> String {
         .replace("\\012", "\n")
         .replace("\\134", "\\")
 }
+/// Counts cgroup directories under `root`, walking iteratively.
 fn count_cgroups(root: &Path) -> Field<usize> {
     let mut stack = vec![root.to_path_buf()];
     let mut seen = HashSet::new();
@@ -212,6 +241,7 @@ fn count_cgroups(root: &Path) -> Field<usize> {
     }
     Field::Value(count)
 }
+/// Lists cgroup directories under `root` as sorted relative paths.
 fn list_cgroups(root: &Path) -> Field<Vec<String>> {
     let mut stack = vec![root.to_path_buf()];
     let mut values = Vec::new();
@@ -241,6 +271,8 @@ fn list_cgroups(root: &Path) -> Field<Vec<String>> {
     values.sort();
     Field::Value(values)
 }
+/// Runs `systemctl` with the given arguments and returns its output lines;
+/// a missing tool or failed run is reported as unsupported.
 fn systemd_lines(args: &[&str]) -> Field<Vec<String>> {
     match Command::new("systemctl").args(args).output() {
         Ok(o) if o.status.success() => Field::Value(
@@ -254,6 +286,8 @@ fn systemd_lines(args: &[&str]) -> Field<Vec<String>> {
         Err(_) => Field::IoError,
     }
 }
+/// Maps socket inode numbers to the pids that hold them open, by reading each
+/// process's file descriptor links.
 fn socket_owners(snapshot: &Snapshot) -> HashMap<u64, Vec<u32>> {
     let mut result: HashMap<u64, Vec<u32>> = HashMap::new();
     for process in &snapshot.processes {
@@ -278,6 +312,9 @@ fn socket_owners(snapshot: &Snapshot) -> HashMap<u64, Vec<u32>> {
     result
 }
 
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 #[cfg(test)]
 mod tests {
     use super::*;
