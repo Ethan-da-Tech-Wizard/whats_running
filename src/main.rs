@@ -1,3 +1,10 @@
+// Program: whats_running - main.rs
+// Programmer: Ethan-da-Tech-Wizard (written with Claude, an AI assistant)
+// Last Modified: 2026-11-18
+// Purpose: Entry point that parses command-line options and runs the table, JSON, inventory, event-capture, quick-check, terminal or GUI mode.
+// ---------------------------------------------------------------------------
+// Modules and imports
+// ---------------------------------------------------------------------------
 mod activity;
 mod check;
 mod events;
@@ -13,12 +20,17 @@ use std::process::ExitCode;
 use std::thread;
 use std::time::Duration;
 
+// ---------------------------------------------------------------------------
+// Options
+// ---------------------------------------------------------------------------
+/// Output format for snapshot mode.
 #[derive(Clone, Copy)]
 enum Format {
     Table,
     Json,
 }
 
+/// Settings chosen on the command line.
 struct Options {
     format: Format,
     show_command: bool,
@@ -33,6 +45,10 @@ struct Options {
     max_record_bytes: u64,
 }
 
+// ---------------------------------------------------------------------------
+// Program flow
+// ---------------------------------------------------------------------------
+/// Runs the program and turns an error message into a failure exit code.
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -43,6 +59,8 @@ fn main() -> ExitCode {
     }
 }
 
+/// Chooses a mode from the parsed options (GUI, terminal, event capture,
+/// quick check, inventory, or repeated snapshots) and runs it.
 fn run() -> Result<(), String> {
     let Some(options) = parse_args()? else {
         return Ok(());
@@ -50,6 +68,7 @@ fn run() -> Result<(), String> {
     if options.gui {
         return gui::run().map_err(|e| e.to_string());
     }
+    // Recording only makes sense for finite event capture, not the terminal UI.
     if options.tui && options.record.is_some() {
         return Err("--record is for finite --events capture, not TUI mode".into());
     }
@@ -60,6 +79,8 @@ fn run() -> Result<(), String> {
     if options.record.is_some() && options.events.is_none() {
         return Err("--record currently requires --events N".into());
     }
+    // Event mode: snapshot before and after capture so started and exited
+    // processes can be reconciled against the event stream.
     if let Some(limit) = options.events {
         let before = collect_snapshot(false).map_err(|e| e.to_string())?;
         let capture =
@@ -89,12 +110,14 @@ fn run() -> Result<(), String> {
         }
         return Ok(());
     }
+    // Quick check mode: plain-text process and port report.
     if options.check {
         let snapshot = collect_snapshot(false).map_err(|e| e.to_string())?;
         let inventory = activity::collect(&snapshot);
         check::report(&snapshot, &inventory);
         return Ok(());
     }
+    // Inventory mode: counts plus the first 50 listening sockets, mounts and cgroups.
     if options.inventory {
         let snapshot = collect_snapshot(false).map_err(|e| e.to_string())?;
         let inventory = activity::collect(&snapshot);
@@ -148,6 +171,8 @@ fn run() -> Result<(), String> {
         }
         return Ok(());
     }
+    // Snapshot mode: take the requested samples, keeping at most 120 in history
+    // so memory stays bounded.
     if options.samples > 120 {
         return Err("--samples is capped at 120 to bound memory and output".into());
     }
@@ -181,6 +206,10 @@ fn run() -> Result<(), String> {
     }
     Ok(())
 }
+// ---------------------------------------------------------------------------
+// JSON output
+// ---------------------------------------------------------------------------
+/// Prints the background inventory as one JSON object.
 fn print_inventory_json(snapshot: &Snapshot, inventory: &activity::Inventory) {
     println!(
         "{{\"schema_version\":1,\"record_type\":\"background_inventory\",\"observer_pid\":{},\"boundary\":\"current namespaces and permissions\",",
@@ -254,6 +283,7 @@ fn print_inventory_json(snapshot: &Snapshot, inventory: &activity::Inventory) {
     }
     println!("}}");
 }
+/// Prints a JSON array of escaped strings.
 fn json_string_vec(values: &[String]) {
     print!("[");
     for (index, value) in values.iter().enumerate() {
@@ -265,6 +295,7 @@ fn json_string_vec(values: &[String]) {
     }
     print!("]")
 }
+/// Prints a field holding a string list as a JSON object with a status.
 fn json_field_vec(field: &Field<Vec<String>>) {
     match field {
         Field::Value(values) => {
@@ -276,6 +307,11 @@ fn json_field_vec(field: &Field<Vec<String>>) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Argument parsing and help
+// ---------------------------------------------------------------------------
+/// Reads command-line arguments. Returns None when help or version was
+/// printed, and an error message for bad input.
 fn parse_args() -> Result<Option<Options>, String> {
     let mut options = Options {
         format: Format::Table,
@@ -325,6 +361,7 @@ fn parse_args() -> Result<Option<Options>, String> {
     Ok(Some(options))
 }
 
+/// Parses an option value that must be a positive whole number.
 fn positive(value: Option<String>, option: &str) -> Result<usize, String> {
     let value = value
         .ok_or_else(|| format!("{option} requires a value"))?
@@ -337,10 +374,16 @@ fn positive(value: Option<String>, option: &str) -> Result<usize, String> {
     }
 }
 
+/// Returns the help text shown for --help.
 fn help() -> &'static str {
     "What's Running? — honest local background-activity visibility\n\nUSAGE:\n    whats-running [--check | --tui | --inventory | --events N | --json] [OPTIONS]\n\nOPTIONS:\n    --check                Print running processes and listening ports as plain text, then exit\n    --tui                  Open the interactive multi-domain terminal interface\n    --inventory            Inventory units, sockets, cgroups, mounts, and timers\n    --events N             Capture up to N kernel lifecycle events (may need elevation)\n    --record PATH          Privately record captured events; requires --events\n    --max-record-bytes N   Hard recording byte cap (default: 10485760)\n    --json                 Emit versioned JSON instead of a table\n    --show-command         Explicitly collect command lines (may reveal secrets)\n    --samples N            Take N snapshots; hard cap 120 (default: 1)\n    --interval-ms N        Milliseconds between snapshots (default: 1000)\n    -h, --help             Show this help\n    -V, --version          Show the version\n\nPRIVACY:\n    Command-line files are not opened unless --show-command is supplied. Environment\n    variables are never collected. Recordings are mode 0600, bounded, and command-free.\n\nCOMPLETENESS:\n    Coverage is relative to enabled collectors, namespaces, permissions, event loss,\n    and sampling windows. Optional event capture never elevates itself or invokes sudo."
 }
 
+// ---------------------------------------------------------------------------
+// Table and JSON snapshot output
+// ---------------------------------------------------------------------------
+/// Prints one snapshot as a text table with CPU and I/O rates taken from the
+/// previous snapshot when there is one.
 fn print_table(snapshot: &Snapshot, previous: Option<&Snapshot>, show_command: bool) {
     let rates = rates(snapshot, previous);
     let io_rates = io_rates(snapshot, previous);
@@ -438,6 +481,7 @@ fn print_table(snapshot: &Snapshot, previous: Option<&Snapshot>, show_command: b
     }
 }
 
+/// Prints one snapshot as a JSON object (system summary plus all processes).
 fn print_json(snapshot: &Snapshot, previous: Option<&Snapshot>, show_command: bool) {
     let rate_map = rates(snapshot, previous);
     let io_rate_map = io_rates(snapshot, previous);
@@ -485,6 +529,7 @@ fn print_json(snapshot: &Snapshot, previous: Option<&Snapshot>, show_command: bo
     print!("    }}");
 }
 
+/// Prints one process as JSON, marking missing fields with their status.
 fn print_process_json(
     process: &Process,
     show_command: bool,
@@ -545,6 +590,7 @@ fn print_process_json(
     print!("    }}");
 }
 
+/// Prints a process's threads as JSON.
 fn print_threads_json(threads: &Field<Vec<procfs::Thread>>) {
     match threads {
         Field::Value(threads) => {
@@ -566,6 +612,7 @@ fn print_threads_json(threads: &Field<Vec<procfs::Thread>>) {
         other => print!("{{\"status\":\"{}\"}}", other.status()),
     }
 }
+/// Prints a process's namespace links as a JSON object.
 fn print_namespaces_json(namespaces: &Field<Vec<(String, String)>>) {
     match namespaces {
         Field::Value(values) => {
@@ -584,6 +631,12 @@ fn print_namespaces_json(namespaces: &Field<Vec<(String, String)>>) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Rates and formatting helpers
+// ---------------------------------------------------------------------------
+/// Computes CPU percent per process from two snapshots. Processes are matched
+/// by pid plus start time so a reused pid is not mistaken for the old process.
+/// 100 means one full CPU.
 fn rates(snapshot: &Snapshot, previous: Option<&Snapshot>) -> HashMap<(u32, Option<u64>), f64> {
     let mut out = HashMap::new();
     let Some(previous) = previous else { return out };
@@ -626,6 +679,7 @@ fn rates(snapshot: &Snapshot, previous: Option<&Snapshot>) -> HashMap<(u32, Opti
     out
 }
 
+/// Counts processes that appeared and disappeared between two snapshots.
 fn changes(snapshot: &Snapshot, previous: Option<&Snapshot>) -> (usize, usize) {
     let Some(previous) = previous else {
         return (0, 0);
@@ -643,7 +697,9 @@ fn changes(snapshot: &Snapshot, previous: Option<&Snapshot>) -> (usize, usize) {
     (now.difference(&old).count(), old.difference(&now).count())
 }
 
+// Read and write bytes per second for each process, keyed like the CPU rates.
 type IoRates = HashMap<(u32, Option<u64>), (Option<f64>, Option<f64>)>;
+/// Computes disk read and write rates from two snapshots using the elapsed time.
 fn io_rates(snapshot: &Snapshot, previous: Option<&Snapshot>) -> IoRates {
     let mut out = HashMap::new();
     let Some(previous) = previous else { return out };
@@ -677,23 +733,28 @@ fn io_rates(snapshot: &Snapshot, previous: Option<&Snapshot>) -> IoRates {
     }
     out
 }
+/// Formats KiB as MiB with one decimal, or "?" when unknown.
 fn mib(v: Option<u64>) -> String {
     v.map(|v| format!("{:.1}", v as f64 / 1024.0))
         .unwrap_or_else(|| "?".into())
 }
+/// Formats used memory (total minus available) in MiB, or "?" when unknown.
 fn used(t: Option<u64>, a: Option<u64>) -> String {
     t.zip(a)
         .and_then(|(t, a)| t.checked_sub(a))
         .map(|v| format!("{:.1}", v as f64 / 1024.0))
         .unwrap_or_else(|| "?".into())
 }
+/// Formats an optional integer for JSON ("null" when missing).
 fn number(v: Option<u64>) -> String {
     v.map(|v| v.to_string()).unwrap_or_else(|| "null".into())
 }
+/// Formats an optional float for JSON ("null" when missing).
 fn decimal(v: Option<f64>) -> String {
     v.map(|v| format!("{v:.3}"))
         .unwrap_or_else(|| "null".into())
 }
+/// Formats a bytes-per-second rate with a K or M suffix.
 fn bytes_rate(v: f64) -> String {
     if v >= 1_048_576.0 {
         format!("{:.1}M", v / 1_048_576.0)
@@ -703,12 +764,14 @@ fn bytes_rate(v: f64) -> String {
         format!("{v:.0}")
     }
 }
+/// Shows the length of a list field, or its status in angle brackets.
 fn count_field<T>(field: &Field<Vec<T>>) -> String {
     match field {
         Field::Value(v) => v.len().to_string(),
         other => format!("<{}>", other.status()),
     }
 }
+/// Shows a field's value, or its status in angle brackets.
 fn display_field<T: std::fmt::Display>(field: &Field<T>) -> String {
     match field {
         Field::Value(v) => v.to_string(),
@@ -716,6 +779,7 @@ fn display_field<T: std::fmt::Display>(field: &Field<T>) -> String {
     }
 }
 
+/// Prints a string field as JSON with its status.
 fn json_field(name: &str, field: &Field<String>, comma: bool) {
     match field {
         Field::Value(value) => println!(
@@ -733,6 +797,7 @@ fn json_field(name: &str, field: &Field<String>, comma: bool) {
     }
 }
 
+/// Prints a numeric field as JSON with its status.
 fn json_typed_number<T: std::fmt::Display>(name: &str, field: &Field<T>, comma: bool) {
     match field {
         Field::Value(value) => println!(
@@ -746,6 +811,7 @@ fn json_typed_number<T: std::fmt::Display>(name: &str, field: &Field<T>, comma: 
         ),
     }
 }
+/// Prints a field as a quoted JSON string with its status.
 fn json_typed_string<T: std::fmt::Display>(name: &str, field: &Field<T>, comma: bool) {
     match field {
         Field::Value(value) => println!(
@@ -761,10 +827,12 @@ fn json_typed_string<T: std::fmt::Display>(name: &str, field: &Field<T>, comma: 
     }
 }
 
+/// Returns "," when a comma should follow the JSON entry, otherwise "".
 fn comma_suffix(comma: bool) -> &'static str {
     if comma { "," } else { "" }
 }
 
+/// Shows a string field's value, or its status in angle brackets.
 fn field_display(field: &Field<String>) -> String {
     match field {
         Field::Value(value) => value.clone(),
@@ -772,6 +840,8 @@ fn field_display(field: &Field<String>) -> String {
     }
 }
 
+/// Replaces control characters so process names cannot inject terminal escape
+/// sequences into the output.
 fn sanitize(value: &str) -> String {
     value
         .chars()
@@ -785,6 +855,7 @@ fn sanitize(value: &str) -> String {
         .collect()
 }
 
+/// Shortens text to `max_chars` characters, ending with an ellipsis if cut.
 fn truncate(value: &str, max_chars: usize) -> String {
     let mut result: String = value.chars().take(max_chars).collect();
     if value.chars().count() > max_chars && max_chars > 0 {
@@ -794,6 +865,7 @@ fn truncate(value: &str, max_chars: usize) -> String {
     result
 }
 
+/// Escapes text for use inside a JSON string.
 fn json_escape(value: &str) -> String {
     let mut escaped = String::new();
     for character in value.chars() {
@@ -812,6 +884,9 @@ fn json_escape(value: &str) -> String {
     escaped
 }
 
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 #[cfg(test)]
 mod tests {
     use super::*;
