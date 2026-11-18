@@ -1,10 +1,22 @@
+// ==============================================================================
+// Program: check.rs
+// Programmer: Ethan-da-Tech-Wizard
+// Last Modified: November 18, 2026
+// Purpose: Quick-check CLI reporting module for What's Running.
+//          Generates terminal summaries of currently active processes and
+//          listening network ports. Decodes IPv4/IPv6 hexadecimal addresses from
+//          Linux /proc/net format and correlates open ports to process owners.
+// ==============================================================================
+
 use crate::activity::Inventory;
 use crate::procfs::{Field, Snapshot};
 use crate::sanitize;
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
+/// Prints a concise summary report of running processes and listening network ports.
 pub fn report(snapshot: &Snapshot, inventory: &Inventory) {
+    // Step 1: Collect and alphabetize process names and PIDs
     let mut names: Vec<(String, u32)> = snapshot
         .processes
         .iter()
@@ -25,18 +37,23 @@ pub fn report(snapshot: &Snapshot, inventory: &Inventory) {
         println!("  {:<28} pid {}", sanitize(name), pid);
     }
 
+    // Step 2: Display listening network ports with decoded IP addresses and owner PIDs
     println!("\nLISTENING PORTS (network services other programs could reach)");
     print_listening_ports(snapshot, inventory);
 
     println!("\nFor the full interactive inspector: whats-running --tui");
 }
 
+/// Identifies and displays all listening network sockets (TCP/UDP).
 fn print_listening_ports(snapshot: &Snapshot, inventory: &Inventory) {
+    // Step 1: Build PID to process name lookup map
     let pid_names: HashMap<u32, String> = snapshot
         .processes
         .iter()
         .map(|p| (p.pid, p.name.value().cloned().unwrap_or_else(|| "?".into())))
         .collect();
+
+    // Step 2: Validate socket inventory field
     let sockets = match &inventory.sockets {
         Field::Value(sockets) => sockets,
         other => {
@@ -44,15 +61,20 @@ fn print_listening_ports(snapshot: &Snapshot, inventory: &Inventory) {
             return;
         }
     };
+
+    // Step 3: Filter for active listening ports (TCP state 0A or UDP)
     let mut listening: Vec<_> = sockets
         .iter()
         .filter(|s| matches!(s.protocol, "tcp" | "tcp6" | "udp" | "udp6"))
         .filter(|s| s.protocol.starts_with("udp") || s.state == "0A")
         .collect();
+
     if listening.is_empty() {
         println!("  none found");
         return;
     }
+
+    // Step 4: Sort and print formatted listening socket details
     listening.sort_by(|a, b| a.local.cmp(&b.local));
     for socket in listening {
         let address = decode_local(&socket.local, socket.protocol);
@@ -75,6 +97,7 @@ fn print_listening_ports(snapshot: &Snapshot, inventory: &Inventory) {
     }
 }
 
+/// Decodes Linux /proc/net hex-encoded IP addresses and ports into standard formats.
 fn decode_local(local: &str, protocol: &str) -> String {
     let Some((addr_hex, port_hex)) = local.split_once(':') else {
         return local.to_string();
@@ -90,12 +113,14 @@ fn decode_local(local: &str, protocol: &str) -> String {
     decoded.unwrap_or_else(|| local.to_string())
 }
 
+/// Decodes 8-character little-endian hexadecimal IPv4 address string into Ipv4Addr.
 fn decode_v4(hex: &str) -> Option<Ipv4Addr> {
     let bytes = hex_bytes(hex)?;
     let [a, b, c, d] = bytes[..].try_into().ok()?;
     Some(Ipv4Addr::new(d, c, b, a))
 }
 
+/// Decodes 32-character hexadecimal IPv6 address string into Ipv6Addr.
 fn decode_v6(hex: &str) -> Option<Ipv6Addr> {
     let bytes = hex_bytes(hex)?;
     let bytes: [u8; 16] = bytes[..].try_into().ok()?;
@@ -108,6 +133,7 @@ fn decode_v6(hex: &str) -> Option<Ipv6Addr> {
     Some(Ipv6Addr::from(reordered))
 }
 
+/// Converts a hex string into a byte vector.
 fn hex_bytes(hex: &str) -> Option<Vec<u8>> {
     if !hex.len().is_multiple_of(2) {
         return None;

@@ -1,3 +1,13 @@
+// ==============================================================================
+// Program: procfs.rs
+// Programmer: Ethan-da-Tech-Wizard
+// Last Modified: November 18, 2026
+// Purpose: Linux /proc filesystem inspector and parser for What's Running.
+//          Collects system uptime, memory metrics (/proc/meminfo), CPU time
+//          (/proc/stat), and per-process telemetry (/proc/[pid]/stat, status,
+//          cmdline, exe, cgroup, io) with granular typed error attribution (Field<T>).
+// ==============================================================================
+
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
