@@ -1,3 +1,13 @@
+// ==============================================================================
+// Program: gui.rs
+// Programmer: Ethan-da-Tech-Wizard
+// Last Modified: November 18, 2026
+// Purpose: Native desktop GUI frontend for What's Running using Iced framework.
+//          Implements Model-View-Update (Elm) architecture with hierarchical process
+//          grouping, heat-bar resource visualization, search filtering, dynamic
+//          sorting, and background snapshot polling.
+// ==============================================================================
+
 //! # gui — Iced native-window frontend for *What's Running?*
 //!
 //! This module implements the full desktop GUI using the [Iced] framework

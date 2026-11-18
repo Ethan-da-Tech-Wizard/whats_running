@@ -1,3 +1,13 @@
+// ==============================================================================
+// Program: tui.rs
+// Programmer: Ethan-da-Tech-Wizard
+// Last Modified: November 18, 2026
+// Purpose: Interactive zero-dependency Terminal User Interface (TUI) for What's Running.
+//          Configures raw terminal I/O via stty, renders ANSI color-coded views
+//          (Processes, Services, Network, System, Events), provides real-time keyboard
+//          navigation, search filtering, process tree rendering, and resource sorting.
+// ==============================================================================
+
 use crate::activity::{self, Inventory};
 use crate::procfs::{Process, Snapshot, collect_snapshot};
 use crate::{field_display, io_rates, mib, rates, sanitize, truncate, used};

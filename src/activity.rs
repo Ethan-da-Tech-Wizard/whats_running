@@ -1,9 +1,20 @@
+// ==============================================================================
+// Program: activity.rs
+// Programmer: Ethan-da-Tech-Wizard
+// Last Modified: November 18, 2026
+// Purpose: Linux background system activity and resource inventory collector.
+//          Inspects socket tables (/proc/net/tcp, udp, unix), mounts (/proc/self/mountinfo),
+//          control group hierarchies (/sys/fs/cgroup), and systemd service/timer units.
+//          Correlates open network socket inodes back to owning process PIDs.
+// ==============================================================================
+
 use crate::procfs::{Field, Snapshot};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+/// Represents an individual network or Unix-domain socket entry.
 #[derive(Debug)]
 pub struct SocketRecord {
     pub protocol: &'static str,
@@ -14,12 +25,16 @@ pub struct SocketRecord {
     pub path: Option<String>,
     pub owners: Vec<u32>,
 }
+
+/// Represents an active filesystem mount point.
 #[derive(Debug)]
 pub struct MountRecord {
     pub mount_point: String,
     pub fs_type: String,
     pub source: String,
 }
+
+/// Comprehensive snapshot of system resources, open sockets, mounts, and units.
 #[derive(Debug)]
 pub struct Inventory {
     pub sockets: Field<Vec<SocketRecord>>,
@@ -33,7 +48,9 @@ pub struct Inventory {
     pub user_timers: Field<Vec<String>>,
 }
 
+/// Collects system inventory data matching the given process snapshot.
 pub fn collect(snapshot: &Snapshot) -> Inventory {
+    // Step 1: Extract unique systemd unit names across all processes
     let mut units: Vec<String> = snapshot
         .processes
         .iter()
@@ -41,6 +58,8 @@ pub fn collect(snapshot: &Snapshot) -> Inventory {
         .collect();
     units.sort();
     units.dedup();
+
+    // Step 2: Build and return the completed inventory record
     Inventory {
         sockets: collect_sockets(snapshot),
         mounts: read_bytes("/proc/self/mountinfo").map(|v| parse_mounts(&v)),
@@ -85,8 +104,11 @@ pub fn collect(snapshot: &Snapshot) -> Inventory {
         ]),
     }
 }
+
+/// Collects open TCP, UDP, and Unix domain sockets, mapping them to owner PIDs.
 fn collect_sockets(snapshot: &Snapshot) -> Field<Vec<SocketRecord>> {
     let mut all = Vec::new();
+    // Step 1: Ingest IP sockets from /proc/net
     for (protocol, path) in [
         ("tcp", "/proc/net/tcp"),
         ("tcp6", "/proc/net/tcp6"),
@@ -98,10 +120,12 @@ fn collect_sockets(snapshot: &Snapshot) -> Field<Vec<SocketRecord>> {
             other => return failure(other),
         }
     }
+    // Step 2: Ingest Unix domain sockets
     match read_bytes("/proc/net/unix") {
         Field::Value(v) => all.extend(parse_unix(&v)),
         other => return failure(other),
     }
+    // Step 3: Correlate socket inodes with process file descriptors
     let owners = socket_owners(snapshot);
     for socket in &mut all {
         if let Some(inode) = socket.inode {
@@ -110,6 +134,8 @@ fn collect_sockets(snapshot: &Snapshot) -> Field<Vec<SocketRecord>> {
     }
     Field::Value(all)
 }
+
+/// Reads file bytes with typed error categorization.
 fn read_bytes(path: &str) -> Field<Vec<u8>> {
     match fs::read(path) {
         Ok(v) => Field::Value(v),
@@ -120,6 +146,8 @@ fn read_bytes(path: &str) -> Field<Vec<u8>> {
         },
     }
 }
+
+/// Maps typed error fields across distinct payload types.
 fn failure<T, U>(field: Field<T>) -> Field<U> {
     match field {
         Field::Value(_) => Field::ParseError,
@@ -131,6 +159,8 @@ fn failure<T, U>(field: Field<T>) -> Field<U> {
         Field::IoError => Field::IoError,
     }
 }
+
+/// Parses /proc/net/tcp and /proc/net/udp line records into SocketRecords.
 fn parse_inet(protocol: &'static str, bytes: &[u8]) -> Vec<SocketRecord> {
     String::from_utf8_lossy(bytes)
         .lines()
@@ -149,6 +179,8 @@ fn parse_inet(protocol: &'static str, bytes: &[u8]) -> Vec<SocketRecord> {
         })
         .collect()
 }
+
+/// Parses /proc/net/unix socket tables into SocketRecords.
 fn parse_unix(bytes: &[u8]) -> Vec<SocketRecord> {
     String::from_utf8_lossy(bytes)
         .lines()
@@ -167,6 +199,8 @@ fn parse_unix(bytes: &[u8]) -> Vec<SocketRecord> {
         })
         .collect()
 }
+
+/// Parses /proc/self/mountinfo mount points and filesystem types.
 fn parse_mounts(bytes: &[u8]) -> Vec<MountRecord> {
     String::from_utf8_lossy(bytes)
         .lines()
@@ -181,6 +215,8 @@ fn parse_mounts(bytes: &[u8]) -> Vec<MountRecord> {
         })
         .collect()
 }
+
+/// Unescapes octal sequences from mountinfo string entries.
 fn unescape(value: &str) -> String {
     value
         .replace("\\040", " ")
@@ -188,6 +224,8 @@ fn unescape(value: &str) -> String {
         .replace("\\012", "\n")
         .replace("\\134", "\\")
 }
+
+/// Counts total active control groups under a cgroup root directory.
 fn count_cgroups(root: &Path) -> Field<usize> {
     let mut stack = vec![root.to_path_buf()];
     let mut seen = HashSet::new();
@@ -212,6 +250,8 @@ fn count_cgroups(root: &Path) -> Field<usize> {
     }
     Field::Value(count)
 }
+
+/// Lists all control group hierarchy paths relative to cgroup root.
 fn list_cgroups(root: &Path) -> Field<Vec<String>> {
     let mut stack = vec![root.to_path_buf()];
     let mut values = Vec::new();
@@ -241,6 +281,8 @@ fn list_cgroups(root: &Path) -> Field<Vec<String>> {
     values.sort();
     Field::Value(values)
 }
+
+/// Executes systemctl with arguments and returns lines of stdout.
 fn systemd_lines(args: &[&str]) -> Field<Vec<String>> {
     match Command::new("systemctl").args(args).output() {
         Ok(o) if o.status.success() => Field::Value(
@@ -254,6 +296,8 @@ fn systemd_lines(args: &[&str]) -> Field<Vec<String>> {
         Err(_) => Field::IoError,
     }
 }
+
+/// Scans process /proc/<pid>/fd symlinks to map socket inodes to owner PIDs.
 fn socket_owners(snapshot: &Snapshot) -> HashMap<u64, Vec<u32>> {
     let mut result: HashMap<u64, Vec<u32>> = HashMap::new();
     for process in &snapshot.processes {
@@ -289,7 +333,7 @@ mod tests {
     }
     #[test]
     fn parses_socket() {
-        let v=parse_inet("tcp",b"sl local_address rem_address st tx rx tr tm retr uid timeout inode\n0: 0100007F:0016 00000000:0000 0A 0 0 0 0 0 123\n");
+        let v = parse_inet("tcp", b"sl local_address rem_address st tx rx tr tm retr uid timeout inode\n0: 0100007F:0016 00000000:0000 0A 0 0 0 0 0 123\n");
         assert_eq!(v[0].state, "0A");
         assert_eq!(v[0].inode, Some(123));
     }

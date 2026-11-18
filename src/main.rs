@@ -1,3 +1,13 @@
+// ==============================================================================
+// Program: main.rs
+// Programmer: Ethan-da-Tech-Wizard
+// Last Modified: November 18, 2026
+// Purpose: Main entry point and CLI option dispatcher for What's Running.
+//          Parses command-line arguments, orchestrates execution modes including
+//          table view, streaming JSON, interactive TUI, native Iced GUI,
+//          quick check summaries, inventory reporting, and event recordings.
+// ==============================================================================
+
 mod activity;
 mod check;
 mod events;

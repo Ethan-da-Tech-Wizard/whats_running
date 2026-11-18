@@ -1,5 +1,14 @@
-//! Linux proc-connector lifecycle events. This is intentionally small and
-//! isolated: failure never degrades into pretend event coverage.
+// ==============================================================================
+// Program: events.rs
+// Programmer: Ethan-da-Tech-Wizard
+// Last Modified: November 18, 2026
+// Purpose: Linux Netlink proc-connector lifecycle event monitor.
+//          Subscribes to kernel process lifecycle notifications via Netlink
+//          sockets (AF_NETLINK, NETLINK_CONNECTOR) to capture real-time process
+//          fork, exec, and exit events without polling. Formats events as JSON
+//          and detects sequence number gaps per CPU core.
+// ==============================================================================
+
 use std::collections::HashMap;
 use std::io;
 use std::mem::size_of;
@@ -17,8 +26,7 @@ unsafe extern "C" {
     fn bind(fd: c_int, address: *const SockAddrNl, length: u32) -> c_int;
     fn send(fd: c_int, buffer: *const c_void, length: usize, flags: c_int) -> isize;
     fn recv(fd: c_int, buffer: *mut c_void, length: usize, flags: c_int) -> isize;
-    fn setsockopt(fd: c_int, level: c_int, name: c_int, value: *const c_void, length: u32)
-    -> c_int;
+    fn setsockopt(fd: c_int, level: c_int, name: c_int, value: *const c_void, length: u32) -> c_int;
     fn close(fd: c_int) -> c_int;
     fn getpid() -> c_int;
 }
@@ -30,12 +38,14 @@ struct SockAddrNl {
     pid: u32,
     groups: u32,
 }
+
 #[repr(C)]
 struct TimeVal {
     seconds: i64,
     microseconds: i64,
 }
 
+/// Represents the classification and payload of a captured process lifecycle event.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kind {
     Fork { parent: u32, child: u32 },
@@ -43,6 +53,8 @@ pub enum Kind {
     Exit { pid: u32, code: u32, signal: u32 },
     Other(u32),
 }
+
+/// Normalized event record carrying kernel telemetry and monotonic sequences.
 #[derive(Debug, Clone)]
 pub struct Event {
     pub sequence: u32,
@@ -51,6 +63,7 @@ pub struct Event {
     pub cpu: u32,
     pub kind: Kind,
 }
+
 impl std::fmt::Display for Event {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -60,7 +73,9 @@ impl std::fmt::Display for Event {
         )
     }
 }
+
 impl Event {
+    /// Serializes the event record into a structured JSON string.
     pub fn json(&self) -> String {
         let kind = match self.kind {
             Kind::Fork { parent, child } => {
@@ -79,6 +94,7 @@ impl Event {
     }
 }
 
+/// RAII wrapper ensuring socket descriptor closure on drop.
 struct Socket(c_int);
 impl Drop for Socket {
     fn drop(&mut self) {
@@ -88,16 +104,22 @@ impl Drop for Socket {
     }
 }
 
+/// Results container for an event capture session.
 pub struct Capture {
     pub events: Vec<Event>,
     pub sequence_gaps: u64,
 }
+
+/// Binds to the kernel proc connector and captures lifecycle events up to a given limit.
 pub fn capture(limit: usize, timeout: Duration) -> io::Result<Capture> {
+    // Step 1: Create Netlink connector socket
     let fd = unsafe { socket(AF_NETLINK, SOCK_DGRAM, NETLINK_CONNECTOR) };
     if fd < 0 {
         return Err(capability_error(io::Error::last_os_error()));
     }
     let socket = Socket(fd);
+
+    // Step 2: Bind socket to connector multicast group
     let address = SockAddrNl {
         family: AF_NETLINK as u16,
         pad: 0,
@@ -107,6 +129,8 @@ pub fn capture(limit: usize, timeout: Duration) -> io::Result<Capture> {
     if unsafe { bind(fd, &address, size_of::<SockAddrNl>() as u32) } < 0 {
         return Err(capability_error(io::Error::last_os_error()));
     }
+
+    // Step 3: Configure socket receive timeout
     let tv = TimeVal {
         seconds: timeout.as_secs() as i64,
         microseconds: timeout.subsec_micros() as i64,
@@ -123,10 +147,14 @@ pub fn capture(limit: usize, timeout: Duration) -> io::Result<Capture> {
     {
         return Err(io::Error::last_os_error());
     }
+
+    // Step 4: Transmit connector subscription request
     let subscribe = subscription_message(unsafe { getpid() } as u32, true);
     if unsafe { send(fd, subscribe.as_ptr() as *const c_void, subscribe.len(), 0) } < 0 {
         return Err(capability_error(io::Error::last_os_error()));
     }
+
+    // Step 5: Read event stream and track sequence continuity
     let mut events = Vec::new();
     let mut last_sequence: HashMap<u32, u32> = HashMap::new();
     let mut sequence_gaps = 0_u64;
@@ -154,6 +182,8 @@ pub fn capture(limit: usize, timeout: Duration) -> io::Result<Capture> {
             events.push(event)
         }
     }
+
+    // Step 6: Unsubscribe from connector notifications prior to close
     let unsubscribe = subscription_message(unsafe { getpid() } as u32, false);
     let _ = unsafe {
         send(
@@ -163,12 +193,14 @@ pub fn capture(limit: usize, timeout: Duration) -> io::Result<Capture> {
             0,
         )
     };
+
     Ok(Capture {
         events,
         sequence_gaps,
     })
 }
 
+/// Translates permission errors into user-friendly capability advice.
 fn capability_error(error: io::Error) -> io::Error {
     if error.kind() == io::ErrorKind::PermissionDenied || error.raw_os_error() == Some(1) {
         io::Error::new(
@@ -179,6 +211,8 @@ fn capability_error(error: io::Error) -> io::Error {
         error
     }
 }
+
+/// Generates proc connector subscription packet buffer.
 fn subscription_message(pid: u32, listen: bool) -> [u8; 40] {
     let mut b = [0_u8; 40];
     put32(&mut b, 0, 40);
@@ -190,6 +224,8 @@ fn subscription_message(pid: u32, listen: bool) -> [u8; 40] {
     put32(&mut b, 36, u32::from(listen));
     b
 }
+
+/// Parses raw Netlink connector packet into an Event record.
 fn parse(b: &[u8]) -> Option<Event> {
     if b.len() < 52 {
         return None;
@@ -226,15 +262,19 @@ fn parse(b: &[u8]) -> Option<Event> {
         kind,
     })
 }
+
 fn put16(b: &mut [u8], o: usize, v: u16) {
     b[o..o + 2].copy_from_slice(&v.to_ne_bytes())
 }
+
 fn put32(b: &mut [u8], o: usize, v: u32) {
     b[o..o + 4].copy_from_slice(&v.to_ne_bytes())
 }
+
 fn get32(b: &[u8], o: usize) -> Option<u32> {
     Some(u32::from_ne_bytes(b.get(o..o + 4)?.try_into().ok()?))
 }
+
 fn get64(b: &[u8], o: usize) -> Option<u64> {
     Some(u64::from_ne_bytes(b.get(o..o + 8)?.try_into().ok()?))
 }
