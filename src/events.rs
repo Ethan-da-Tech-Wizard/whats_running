@@ -223,8 +223,7 @@ pub fn capture(limit: usize, timeout: Duration) -> io::Result<Capture> {
 
     // Step 6: Unsubscribe from connector notifications prior to close
     // Best-effort polite unsubscribe; the result is ignored because closing the socket ends the
-    // subscription anyway. NOTE: `false` encodes as 0, whereas the kernel's PROC_CN_MCAST_IGNORE is 2,
-    // so the kernel probably rejects this message; harmless given the close.
+    // subscription anyway. subscription_message encodes `false` as PROC_CN_MCAST_IGNORE (2).
     let unsubscribe = subscription_message(unsafe { getpid() } as u32, false);
     let _ = unsafe {
         send(
@@ -270,8 +269,9 @@ fn subscription_message(pid: u32, listen: bool) -> [u8; 40] {
     put32(&mut b, 20, 1);
     // cn_msg.len = size of the payload that follows (one u32).
     put16(&mut b, 32, 4);
-    // Payload: 1 = listen. See the note in capture() about the value used for unsubscribe.
-    put32(&mut b, 36, u32::from(listen));
+    // Payload: PROC_CN_MCAST_LISTEN = 1, PROC_CN_MCAST_IGNORE = 2 (linux/cn_proc.h). Unsubscribe
+    // used to send 0, which the kernel does not recognise as a valid operation.
+    put32(&mut b, 36, if listen { 1 } else { 2 });
     b
 }
 
@@ -358,5 +358,12 @@ mod tests {
         let b = subscription_message(7, true);
         assert_eq!(get32(&b, 0), Some(40));
         assert_eq!(get32(&b, 36), Some(1));
+    }
+
+    /// Regression: unsubscribing must send PROC_CN_MCAST_IGNORE (2), not 0, which the kernel rejects.
+    #[test]
+    fn unsubscribe_sends_ignore_op() {
+        let b = subscription_message(7, false);
+        assert_eq!(get32(&b, 36), Some(2));
     }
 }
