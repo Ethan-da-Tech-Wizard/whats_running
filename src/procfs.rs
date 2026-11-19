@@ -13,6 +13,12 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+/// Algebraic data type modeling granular telemetry field provenance and error attribution.
+///
+/// Observability Architecture Rationale:
+/// Standard `Option<T>` conflates missing fields, permission denials (EACCES/EPERM under SELinux/DAC),
+/// process termination races (ESRCH/Vanished), and parser discrepancies. `Field<T>` explicitly preserves
+/// error causality so UI layers can render accurate diagnostics rather than silent zeroes or blank values.
 #[derive(Debug, Clone)]
 pub enum Field<T> {
     Value(T),
