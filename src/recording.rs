@@ -8,6 +8,11 @@
 //          to prevent runaway disk usage during profiling runs.
 // ==============================================================================
 
+// How it fits the app: main.rs collects `Event`s from events.rs (the Netlink proc-connector reader)
+// and, when the user asks to record, hands them to `write_events` here. Nothing else reads the file
+// back inside this crate; it is meant for offline analysis (one JSON object per line, header first).
+// Inputs: destination path, event slice, byte cap. Output: `(events_written, bytes_written)`.
+// Known limits: Unix only (file modes); a cap that is too small yields an error, not a partial header.
 use crate::events::Event;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
@@ -16,8 +21,19 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
 /// Serializes and writes lifecycle events to disk within size constraints and secure permissions.
+///
+/// # Arguments
+/// * `path` - destination file; created or truncated, never appended to.
+/// * `events` - events in capture order; only a prefix is written if `max_bytes` is reached.
+/// * `max_bytes` - hard cap on the file size in bytes, header included.
+///
+/// # Returns
+/// `(count, bytes)`: events actually written and the final file size. `count < events.len()`
+/// means the cap truncated the recording.
+///
+/// # Errors
+/// I/O errors from open/write/sync, or `InvalidInput` if `max_bytes` cannot even hold the header.
 pub fn write_events(path: &Path, events: &[Event], max_bytes: u64) -> io::Result<(usize, u64)> {
-    // Step 1: Open file with restricted owner-only read/write permissions (0600)
     let mut file = OpenOptions::new()
         // create + truncate: every recording starts from an empty file, never appends to an old one.
         .create(true)
@@ -28,7 +44,6 @@ pub fn write_events(path: &Path, events: &[Event], max_bytes: u64) -> io::Result
         .mode(0o600)
         .open(path)?;
 
-    // Step 2: Write metadata header preamble
     // First JSONL line identifies the format. `commands_included:false` records that command lines
     // are deliberately never written, so recordings are safe(r) to share. Bump schema_version on any format change.
     let header = "{\"record_type\":\"whats-running-events\",\"schema_version\":1,\"commands_included\":false}\n";
@@ -41,7 +56,7 @@ pub fn write_events(path: &Path, events: &[Event], max_bytes: u64) -> io::Result
     }
     file.write_all(header.as_bytes())?;
 
-    // Step 3: Stream and write individual event lines while respecting byte threshold
+    // `bytes` tracks the running file size so the cap check below never needs to stat the file.
     let mut bytes = header.len() as u64;
     let mut count = 0;
     for event in events {
@@ -56,7 +71,6 @@ pub fn write_events(path: &Path, events: &[Event], max_bytes: u64) -> io::Result
         count += 1;
     }
 
-    // Step 4: Flush filesystem buffers
     // Force data to disk so a crash right after returning cannot lose a recording the caller was told succeeded.
     file.sync_all()?;
     // Returns (events written, total bytes including header) so callers can report any truncation.
@@ -67,6 +81,8 @@ pub fn write_events(path: &Path, events: &[Event], max_bytes: u64) -> io::Result
 mod tests {
     use super::*;
     use crate::events::{Event, Kind};
+    /// Pins down the two safety promises of recordings: the file never exceeds the byte cap, and it
+    /// is readable only by its owner (0600). Scenario: two identical events but room for one.
     /// Cap of 180 bytes fits the header plus about one event, so the second (identical) event must be dropped.
     #[test]
     fn recording_is_bounded_and_private() {

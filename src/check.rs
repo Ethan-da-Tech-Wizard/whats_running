@@ -8,6 +8,11 @@
 //          Linux /proc/net format and correlates open ports to process owners.
 // ==============================================================================
 
+// How it fits the app: main.rs calls `report` for the default (non-TUI) quick check, passing the
+// process `Snapshot` from procfs.rs and the socket `Inventory` from activity.rs. This module only
+// formats; it reads nothing from /proc itself except through those inputs.
+// Output: plain text on stdout. Known limit: only TCP LISTEN and UDP-bound sockets are shown, and
+// IPv4/IPv6 are decoded from the little-endian hex that /proc/net prints (see decode_v4/decode_v6).
 use crate::activity::Inventory;
 use crate::procfs::{Field, Snapshot};
 use crate::sanitize;
@@ -17,7 +22,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 /// Prints a concise summary report of running processes and listening network ports.
 pub fn report(snapshot: &Snapshot, inventory: &Inventory) {
-    // Step 1: Collect and alphabetize process names and PIDs
+    // A name the scan could not read shows as "?" so the PID is still listed.
     let mut names: Vec<(String, u32)> = snapshot
         .processes
         .iter()
@@ -41,7 +46,6 @@ pub fn report(snapshot: &Snapshot, inventory: &Inventory) {
         println!("  {:<28} pid {}", sanitize(name), pid);
     }
 
-    // Step 2: Display listening network ports with decoded IP addresses and owner PIDs
     println!("\nLISTENING PORTS (network services other programs could reach)");
     print_listening_ports(snapshot, inventory);
 
@@ -50,14 +54,13 @@ pub fn report(snapshot: &Snapshot, inventory: &Inventory) {
 
 /// Identifies and displays all listening network sockets (TCP/UDP).
 fn print_listening_ports(snapshot: &Snapshot, inventory: &Inventory) {
-    // Step 1: Build PID to process name lookup map
+    // Lookup used below to turn owner PIDs into readable names without rescanning the snapshot.
     let pid_names: HashMap<u32, String> = snapshot
         .processes
         .iter()
         .map(|p| (p.pid, p.name.value().cloned().unwrap_or_else(|| "?".into())))
         .collect();
 
-    // Step 2: Validate socket inventory field
     // `Field` models data that may be unavailable (permissions, non-Linux); show the status instead of failing.
     let sockets = match &inventory.sockets {
         Field::Value(sockets) => sockets,
@@ -67,7 +70,6 @@ fn print_listening_ports(snapshot: &Snapshot, inventory: &Inventory) {
         }
     };
 
-    // Step 3: Filter for active listening ports (TCP state 0A or UDP)
     let mut listening: Vec<_> = sockets
         .iter()
         .filter(|s| matches!(s.protocol, "tcp" | "tcp6" | "udp" | "udp6"))
@@ -80,7 +82,6 @@ fn print_listening_ports(snapshot: &Snapshot, inventory: &Inventory) {
         return;
     }
 
-    // Step 4: Sort and print formatted listening socket details
     // Sorts by the raw hex string, which groups by address; it is not numeric port order.
     listening.sort_by(|a, b| a.local.cmp(&b.local));
     for socket in listening {
@@ -162,11 +163,14 @@ fn hex_bytes(hex: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     /// 0100007F is 127.0.0.1 in /proc byte order and 0x0016 is port 22.
     #[test]
     fn decodes_ipv4_loopback_and_port() {
         assert_eq!(decode_local("0100007F:0016", "tcp"), "127.0.0.1:22");
     }
+    /// All-zero address is the wildcard 0.0.0.0 (a service reachable from every interface), the
+    /// case users most need to notice; 0x1F90 = 8080 checks a multi-byte port.
     #[test]
     fn decodes_ipv4_wildcard() {
         assert_eq!(decode_local("00000000:1F90", "tcp"), "0.0.0.0:8080");
@@ -179,6 +183,8 @@ mod tests {
             "[::1]:80"
         );
     }
+    /// Garbage must be echoed back unchanged: the report should never hide a socket or panic just
+    /// because /proc output was unexpected.
     #[test]
     fn falls_back_on_malformed_input() {
         assert_eq!(decode_local("not-an-address", "tcp"), "not-an-address");
