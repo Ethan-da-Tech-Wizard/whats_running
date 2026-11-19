@@ -298,13 +298,13 @@ fn parse(b: &[u8]) -> Option<Event> {
         // Event codes: 1 = PROC_EVENT_FORK, 2 = PROC_EVENT_EXEC, 0x80000000 = PROC_EVENT_EXIT.
         1 => Kind::Fork {
             parent: get32(b, u)?,
-            /// fork data = parent_pid@0, parent_tgid@4, child_pid@8, child_tgid@12; we read the pids.
+            // fork data = parent_pid@0, parent_tgid@4, child_pid@8, child_tgid@12; we read the pids.
             child: get32(b, u + 8)?,
         },
         2 => Kind::Exec { pid: get32(b, u)? },
         0x8000_0000 => Kind::Exit {
             pid: get32(b, u)?,
-            /// exit data = pid@0, tgid@4, exit_code@8, exit_signal@12.
+            // exit data = pid@0, tgid@4, exit_code@8, exit_signal@12.
             code: get32(b, u + 8)?,
             signal: get32(b, u + 12)?,
         },

@@ -427,8 +427,8 @@ fn parse_stat(bytes: &[u8]) -> Option<ParsedStat> {
     let fields: Vec<&str> = remainder.split_whitespace().collect();
     Some(ParsedStat {
         name,
-        /// Indexes below are relative to the text after the name: [0]=state, [1]=ppid, [11]=utime,
-        /// [12]=stime, [19]=starttime (proc(5) fields 3, 4, 14, 15, 22).
+        // Indexes below are relative to the text after the name: [0]=state, [1]=ppid, [11]=utime,
+        // [12]=stime, [19]=starttime (proc(5) fields 3, 4, 14, 15, 22).
         state: fields.first()?.chars().next()?,
         ppid: fields.get(1)?.parse().ok()?,
         user_ticks: fields.get(11)?.parse().ok()?,
