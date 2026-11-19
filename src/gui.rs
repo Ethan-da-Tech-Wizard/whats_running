@@ -54,6 +54,20 @@
 //!   operation.
 
 // ─── Standard imports ─────────────────────────────────────────────────────────
+// Data flow in one sentence: every Tick replaces the snapshot, `view()` turns snapshot + UI state into
+// widgets, and user input comes back as `Message`s handled in `update()`.
+//
+// Called by: main.rs `run()` when `--gui` is passed (see `pub fn run` at the bottom).
+// Calls: procfs::collect_snapshot for data, main.rs helpers (rates, io_rates, used, mib) for the same
+// numbers the CLI and TUI print.
+//
+// Known limits: Linux only (reads /proc); the process list is rebuilt from scratch on each view call
+// (fine for a few thousand rows, not designed for virtual scrolling); command lines are never collected
+// in the GUI (`collect_snapshot(false)`), so there is no way to leak secrets through the window.
+//
+// Testing: this file has no unit tests (iced needs a display); the pure helpers (`fmt_*`,
+// `process_status`, `is_kernel_thread_name`) are small enough to check by reading. Run with
+// `cargo run --release -- --gui`.
 use std::collections::{HashMap, HashSet};
 
 /// Same shape as main.rs `IoRates`: (pid, start_ticks) -> (read B/s, write B/s). Keying by start time
@@ -62,14 +76,18 @@ type IoRateMap = HashMap<(u32, Option<u64>), (Option<f64>, Option<f64>)>;
 use std::time::Duration;
 
 // ─── Iced imports ─────────────────────────────────────────────────────────────
+// Iced imports: keyboard (arrow/j/k handling), canvas (heat bars), and the widget constructors used by the builders below.
 use iced::keyboard::{self, key::Named};
 use iced::widget::canvas;
 use iced::widget::{button, column, container, horizontal_rule, row, scrollable, text, text_input};
 
 use iced::{Color, Element, Font, Length, Subscription, Task, Theme};
+
+// `time::every` drives the refresh timer; `event::listen` delivers raw events (keyboard) as Message::IcedEvent.
 use iced::{event, time};
 
 // ─── Internal imports ─────────────────────────────────────────────────────────
+// Shared logic lives outside this file on purpose: CPU%/I/O rates and memory formatting are identical to the CLI/TUI.
 use crate::procfs::{Process, Snapshot, collect_snapshot};
 use crate::{io_rates, mib, rates, used};
 
@@ -82,6 +100,9 @@ use crate::{io_rates, mib, rates, used};
 // existing terminal aesthetic of the project.
 
 /// Deepest background — used for the main window and even-numbered rows.
+// Palette: dark background tiers (BG < BG2 < BG3 < BG_GROUP < SEL get progressively lighter so layers are
+// distinguishable without borders), one magenta ACCENT, and FG/FG_DIM for primary/secondary text.
+// The hex comments after each constant are the same colours for people editing them in a colour picker.
 const BG: Color = Color {
     r: 0.051,
     g: 0.059,
@@ -91,6 +112,7 @@ const BG: Color = Color {
 
 /// Slightly lighter background — used for odd rows, header bar, toolbar,
 /// detail panel.
+// BG2 is used for every "chrome" region (header, toolbar, detail panel) so they read as one frame around the list.
 const BG2: Color = Color {
     r: 0.075,
     g: 0.086,
@@ -107,6 +129,7 @@ const BG3: Color = Color {
 }; // #1c2028
 
 /// Magenta accent — used for titles, active filter buttons, sort arrows.
+// The single accent colour: kept to one hue so highlights (title, active button, sort arrow) always mean "this is active".
 const ACCENT: Color = Color {
     r: 0.78,
     g: 0.22,
@@ -123,6 +146,7 @@ const FG: Color = Color {
 }; // #d9dde8
 
 /// Dimmed text — used for secondary labels and I/O rate cells.
+// Clearly secondary to FG but still readable on BG. Same value as STATUS_SLEEPING on purpose, so idle states look "quiet".
 const FG_DIM: Color = Color {
     r: 0.50,
     g: 0.52,
@@ -148,6 +172,8 @@ const BG_GROUP: Color = Color {
 }; // #181b24
 
 // Heat-bar colours (used for the thin indicator behind CPU% / Memory values)
+// Heat bars are translucent (alpha < 1) so the label stays legible on top and the row shading shows through.
+// Thresholds that choose between low/medium/high live in `heat_cell`.
 const HEAT_LOW: Color = Color {
     r: 0.18,
     g: 0.58,
@@ -170,6 +196,8 @@ const HEAT_HIGH: Color = Color {
 }; // translucent red
 
 // Status-label colours
+// Status colours: green = actively running, grey = idle/sleeping (the common, uninteresting case),
+// amber = needs a glance (disk wait, stopped), red = problem (zombie, dead).
 const STATUS_RUNNING: Color = Color {
     r: 0.30,
     g: 0.85,
@@ -200,6 +228,8 @@ const STATUS_OTHER: Color = Color {
 
 // Column pixel widths — kept as named constants so every function that lays out
 // a row uses the same numbers and columns stay perfectly aligned.
+// Header cells and data cells both read these constants, which is the only thing keeping the columns aligned
+// (rows are separate widgets, not a table). Sum is 740 px plus 1 px spacing per gap, inside the 980 px window.
 const W_NAME: f32 = 280.0;
 /// Fixed pixel widths of the remaining columns; header cells and data cells share them to stay aligned.
 const W_STATUS: f32 = 90.0;
@@ -218,6 +248,8 @@ const W_WRITE: f32 = 90.0;
 /// direction; clicking a new column always defaults to descending (highest
 /// value first) except for Name which defaults to ascending (A→Z).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// Sort state is (column, ascending flag) stored on App; this enum is only the column. Rate columns exist
+// because the I/O columns are sortable too.
 pub enum SortCol {
     Name,
     Status,
@@ -232,6 +264,7 @@ pub enum SortCol {
 /// `UserApps` is the default and the most useful mode — it hides the hundreds
 /// of kernel worker threads that would otherwise drown out real user processes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// Mirrors the TUI's All / UserApps / Mine filters (the TUI also has a "Problems" filter that the GUI omits).
 pub enum FilterMode {
     /// Show every process visible in /proc.
     All,
@@ -244,6 +277,7 @@ pub enum FilterMode {
 
 /// Update speed setting (refresh interval).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// Maps to the subscription timer in `App::subscription`. Paused removes the timer entirely, so no /proc reads happen.
 pub enum UpdateSpeed {
     High,   // 0.5s
     Normal, // 1s
@@ -259,6 +293,8 @@ pub enum UpdateSpeed {
 /// are sorted among themselves; children are always sorted by CPU descending
 /// within their group so the busiest child floats to the top.
 #[derive(Debug)]
+// Borrowed (`'a`) from the snapshot so building the rows allocates only the Vec, not copies of process data.
+// Group = a collapsible header with summed values; Child = one real process shown under it.
 enum DisplayRow<'a> {
     /// Aggregate header for a group of processes sharing the same short name.
     Group {
@@ -299,6 +335,7 @@ pub enum Message {
     /// Fired by the 1-second subscription timer.  Triggers a fresh `/proc`
     /// snapshot collection.  The `Instant` payload is unused but required by
     /// `time::every`'s mapped type.
+    // Unit payload: `time::every` yields an Instant that is discarded by `.map(|_| Message::Tick(()))`.
     Tick(()),
 
     /// User clicked a column header → change or invert the sort.
@@ -320,6 +357,8 @@ pub enum Message {
     SetUpdateSpeed(UpdateSpeed),
 
     /// Raw Iced event — used to intercept keyboard presses for navigation.
+    // All raw events are forwarded; `update` filters for key presses and ignores the rest, which keeps the
+    // subscription code trivial at the cost of one cheap match per mouse move.
     IcedEvent(iced::Event),
 }
 
@@ -331,6 +370,7 @@ pub enum Message {
 ///
 /// All mutable UI and data state lives here.  Iced calls `view(&self)` to
 /// derive the widget tree, and `update(&mut self, msg)` to apply changes.
+// Everything the UI needs lives here; there is no hidden global state. `view()` only reads it.
 pub struct App {
     /// The most recent snapshot collected from /proc.  `None` only on the very
     /// first frame before the subscription has fired once.
@@ -361,6 +401,7 @@ pub struct App {
     ///
     /// A group that is NOT in this set is expanded (children visible).
     /// We default to all groups expanded, so this starts empty.
+    // Stores *collapsed* names (not expanded) so a newly appearing group is expanded by default without any bookkeeping.
     collapsed: HashSet<String>,
 
     /// Speed at which process data is polled and refreshed.
@@ -373,12 +414,14 @@ impl App {
     ///
     /// `Task::none()` means "do nothing extra on startup"; the subscription
     /// timer will fire within 1 second to populate the process list.
+    // Called once by `iced::application(...).run_with(App::new)` in `run()`.
     pub fn new() -> (Self, Task<Message>) {
         (
             Self {
                 snapshot: None,
                 previous: None,
                 sort: SortCol::Cpu,
+                // Descending by default because "what uses the most CPU" is the first question users ask.
                 sort_asc: false,              // default: highest CPU first
                 filter: FilterMode::UserApps, // start in the clean "Apps" view
                 search: String::new(),
@@ -396,6 +439,7 @@ impl App {
     ///
     /// Includes the live process count so the user can glance at the title bar
     /// without looking at the header row.
+    // Iced calls this after every update, so the title bar count stays live without extra code.
     pub fn title(&self) -> String {
         match &self.snapshot {
             Some(s) => format!("What's Running? — {} processes", s.processes.len()),
@@ -405,6 +449,8 @@ impl App {
 
     /// The MVU *update* function.  Called once per message; mutates `self` and
     /// returns a follow-up `Task` (almost always `Task::none()`).
+    // Contract: `update` must be cheap and never block. The only I/O here is the /proc scan in the Tick arm,
+    // which takes roughly a millisecond (see the module notes).
     pub fn update(&mut self, msg: Message) -> Task<Message> {
         match msg {
             // ── Timer tick: collect a fresh snapshot ──────────────────────────
@@ -412,6 +458,8 @@ impl App {
                 // Rotate: current → previous, then collect a new current.
                 // We keep the previous snapshot alive so the next `view()` call
                 // can compute per-process deltas (CPU%, I/O rates).
+                // take() empties `snapshot` before collecting. If collection fails it stays empty, so the UI shows the loading
+                // view until a later tick succeeds, while `previous` keeps the older baseline.
                 let prev = self.snapshot.take();
                 if let Ok(snap) = collect_snapshot(false) {
                     // Only overwrite `previous` if we successfully got a new
@@ -433,6 +481,8 @@ impl App {
                     // New column: set direction to the sensible default for that
                     // column (Name → A-Z ascending; everything else → descending).
                     self.sort = col;
+
+                    // Name and Status start ascending (A-Z) because alphabetical order is the natural reading; numeric columns start with the largest value.
                     self.sort_asc = col == SortCol::Name || col == SortCol::Status;
                 }
             }
@@ -446,6 +496,7 @@ impl App {
             }
 
             // ── Search box input ──────────────────────────────────────────────
+            // Search matches process names only (case-insensitive substring); the TUI also searches the executable path.
             Message::SearchChanged(s) => {
                 self.search = s;
                 self.selected = None; // reset selection when the list changes
@@ -462,6 +513,7 @@ impl App {
             }
 
             // ── Group header click: expand or collapse ────────────────────────
+            // Toggle via contains/remove/insert on the collapsed set; owned String because the message outlives the frame.
             Message::ToggleGroup(name) => {
                 // We use a set of *collapsed* names so the default (empty set)
                 // means "all expanded".
@@ -478,6 +530,7 @@ impl App {
             }
 
             // ── Raw event: intercept arrow / j-k keys ─────────────────────────
+            // Navigation keys: arrows and vi-style j/k. Other keys are ignored because the search box handles typing itself.
             Message::IcedEvent(iced::Event::Keyboard(keyboard::Event::KeyPressed {
                 key, ..
             })) => match key {
@@ -500,8 +553,10 @@ impl App {
     /// We subscribe to two things:
     /// 1. A 1-second timer that drives the data refresh loop.
     /// 2. All keyboard events so we can implement arrow-key navigation.
+    // Iced re-evaluates this when state changes, so switching UpdateSpeed swaps the timer without manual cleanup.
     pub fn subscription(&self) -> Subscription<Message> {
         let timer = match self.update_speed {
+            // Intervals: 0.5 s (High), 1 s (Normal), 3 s (Low). Faster refresh costs more CPU in this process itself.
             UpdateSpeed::High => time::every(Duration::from_millis(500)).map(|_| Message::Tick(())),
             UpdateSpeed::Normal => time::every(Duration::from_secs(1)).map(|_| Message::Tick(())),
             UpdateSpeed::Low => time::every(Duration::from_secs(3)).map(|_| Message::Tick(())),
@@ -522,6 +577,7 @@ impl App {
     /// We build a custom theme from the project's colour palette so that
     /// widgets like `text_input`, `scrollable`, and `horizontal_rule` all use
     /// the dark background by default rather than Iced's built-in light theme.
+    // Custom theme (not Theme::Dark) so text inputs and scroll bars inherit the palette above, not iced's default.
     pub fn theme(&self) -> Theme {
         Theme::custom(
             "WRDark".into(),
@@ -551,6 +607,8 @@ impl App {
     ///
     /// Returns the complete widget tree for this frame.  This is a pure
     /// function of `&self` — it never mutates state.
+    // Pipeline: snapshot -> rate maps -> filter + search -> group into DisplayRows -> widget tree.
+    // All of it is recomputed per view call; `Tick` is the only thing that changes the inputs, so the work is bounded by the refresh rate.
     pub fn view(&self) -> Element<'_, Message> {
         // Show a placeholder while the first snapshot is in flight.
         let snap = match &self.snapshot {
@@ -561,6 +619,7 @@ impl App {
         // Pre-compute per-process CPU% and I/O-rate maps.
         // These are O(n) HashMaps keyed by (pid, start_ticks) so that we never
         // confuse a new process that happens to reuse an old PID.
+        // Empty on the first frame (no previous snapshot), so CPU% and I/O cells show 0 / "?" until the second tick.
         let cpu_map = rates(snap, self.previous.as_ref());
         let io_map = io_rates(snap, self.previous.as_ref());
 
@@ -579,6 +638,8 @@ impl App {
 
         // Apply filter + search → list of visible processes.
         let search_lc = self.search.to_lowercase();
+
+        // Two filters in sequence: category (`passes_filter`) then search text.
         let filtered: Vec<&Process> = snap
             .processes
             .iter()
@@ -595,6 +656,8 @@ impl App {
         let display_rows = self.build_display_rows(&filtered, &cpu_map, &io_map);
 
         // ── Assemble the full widget tree ─────────────────────────────────────
+        // Vertical stack, top to bottom: header, toolbar, column headers, scrolling list (takes the remaining
+        // height), detail panel. Thin horizontal rules separate the regions.
         let ui = column![
             self.build_header(snap),
             horizontal_rule(1),
@@ -608,6 +671,7 @@ impl App {
         ]
         .spacing(0);
 
+        // Outer container paints the window background so gaps between regions are not the toolkit default colour.
         container(ui)
             .width(Length::Fill)
             .height(Length::Fill)
@@ -630,6 +694,8 @@ impl App {
     ///   aggregate value (sum CPU, sum RSS, group name, etc.).
     /// * Within an expanded group, child processes are always sorted by CPU%
     ///   descending so the busiest child appears first.
+    // Complexity: O(n) to group + O(g log g) to sort groups + O(m log m) per expanded group; n processes, g groups.
+    // Returns rows in final display order, so the renderer never sorts.
     fn build_display_rows<'a>(
         &self,
         filtered: &[&'a Process],
@@ -639,6 +705,7 @@ impl App {
         // ── Step 1: partition into groups (by short name) ─────────────────────
         // We use an insertion-ordered Vec<(name, members)> to preserve a
         // stable base order before sorting.
+        // `group_order` keeps first-seen order so ties sort deterministically before the active sort is applied.
         let mut group_map: HashMap<&str, Vec<&Process>> = HashMap::new();
         let mut group_order: Vec<&str> = Vec::new();
 
@@ -652,6 +719,7 @@ impl App {
 
         // ── Step 2: compute per-group aggregate values ────────────────────────
         // (total_cpu, total_rss, min_status_priority) for sorting.
+        // Local struct: only needed inside this function, to compute each group's sums once instead of inside the sort comparator.
         struct GroupAgg {
             total_cpu: f64,
             total_rss: u64,
@@ -683,6 +751,9 @@ impl App {
             .collect();
 
         // ── Step 3: sort groups by the active column ──────────────────────────
+        // Groups are ordered by their *aggregate* value for the active column. CPU and memory use bucketed
+        // values (0.5 %, 1 MiB, 10 KiB/s) so small fluctuations between ticks do not make rows jump around;
+        // ties fall back to the group name, which keeps the order total and stable.
         group_order.sort_by(|&a, &b| {
             let ga = &agg[a];
             let gb = &agg[b];
@@ -720,6 +791,8 @@ impl App {
                         if self.sort_asc { a.cmp(b) } else { b.cmp(a) }
                     }
                 }
+
+                // Read and write rates are summed across the group's members; processes without a rate count as 0.
                 SortCol::ReadRate => {
                     let ra: f64 = group_map[a]
                         .iter()
@@ -784,13 +857,17 @@ impl App {
         });
 
         // ── Step 4: flatten into DisplayRows ──────────────────────────────────
+        // Capacity: one row per process plus one header per group, so pushes never reallocate.
         let mut rows: Vec<DisplayRow<'a>> = Vec::with_capacity(filtered.len() + group_order.len());
 
         for name in group_order {
             let members = &group_map[name];
             let g = &agg[name];
+
+            // Collapsed groups still get a header (with totals) but contribute no child rows.
             let expanded = !self.collapsed.contains(name);
 
+            // Totals come from the aggregate map computed in step 2, not from the children, so collapsed groups show correct sums too.
             rows.push(DisplayRow::Group {
                 name,
                 count: members.len(),
@@ -823,6 +900,7 @@ impl App {
                     }
                 });
 
+                // CPU and I/O values are looked up once here and stored in the row, so the renderer needs no maps.
                 for &p in &sorted_members {
                     let cpu = cpu_map
                         .get(&(p.pid, p.start_ticks.copied()))
@@ -848,6 +926,8 @@ impl App {
     /// Move the selection cursor up (`delta = -1`) or down (`delta = 1`) by
     /// finding all selectable child PIDs in display order and shifting the
     /// current index.
+    // Keyboard navigation moves through *visible child rows only*, in display order, so collapsed groups are skipped.
+    // Rebuilds the same filtered row list as `view()` (duplicated code: update has no access to the view's locals).
     fn move_selection(&mut self, delta: i64) {
         // We need the snapshot to build the display rows; if we don't have one
         // yet, keyboard nav is a no-op.
@@ -893,11 +973,13 @@ impl App {
             return;
         }
 
+        // If nothing is selected (or the selected process disappeared), start from the first row.
         let current_idx = self
             .selected
             .and_then(|pid| pids.iter().position(|&p| p == pid))
             .unwrap_or(0);
 
+        // Clamped, not wrapped: pressing down at the last row stays on it.
         let new_idx = (current_idx as i64 + delta).clamp(0, pids.len() as i64 - 1) as usize;
 
         self.selected = Some(pids[new_idx]);
@@ -908,6 +990,7 @@ impl App {
     // ══════════════════════════════════════════════════════════════════════════
 
     /// Renders the top header bar: app title + live system stats.
+    // Memory and swap text uses the same `used`/`mib` helpers as the CLI header, so the numbers match everywhere.
     fn build_header(&self, snap: &Snapshot) -> Element<'_, Message> {
         let title = text("⚡  What's Running?")
             .size(18)
@@ -941,6 +1024,8 @@ impl App {
     }
 
     /// Renders the toolbar: filter buttons, tree-toggle, search box.
+    // Layout, left to right: filter buttons, spacer, interval buttons, spacer, search box. The `horizontal_space`
+    // widgets push the groups apart so the toolbar adapts to window width.
     fn build_toolbar(&self) -> Element<'_, Message> {
         // Helper closure that creates a styled toggle button.
         // Using `&'static str` for `label` avoids lifetime issues with the
@@ -966,6 +1051,7 @@ impl App {
             .on_press(Message::SetFilter(mode))
         };
 
+        // Same look as filter_btn with tighter padding; duplicated rather than parameterised because the two differ in message type and padding.
         let speed_btn = |label: &'static str, speed: UpdateSpeed| {
             let active = self.update_speed == speed;
             button(
@@ -987,6 +1073,7 @@ impl App {
             .on_press(Message::SetUpdateSpeed(speed))
         };
 
+        // `on_input` makes it a live search: every keystroke sends SearchChanged and re-filters the list.
         let search = text_input("  search…", &self.search)
             .on_input(Message::SearchChanged)
             .padding([5, 10])
@@ -1027,10 +1114,13 @@ impl App {
     ///
     /// Each header is a button so clicking it fires `Message::SortBy`.
     /// The active sort column shows an up/down arrow in the accent colour.
+    // Header cells use the same width constants as the data cells (W_*), so columns line up.
     fn build_col_headers(&self) -> Element<'_, Message> {
         // Inner helper: make one header cell.
         let hdr = |label: &str, col: SortCol, w: f32| {
             let active = self.sort == col;
+
+            // The arrow shows the *current* direction on the active column only; clicking the active column flips it.
             let arrow = if active {
                 if self.sort_asc { " ▲" } else { " ▼" }
             } else {
@@ -1073,6 +1163,7 @@ impl App {
     }
 
     /// Renders the scrollable process list from pre-built `DisplayRow`s.
+    // One widget per row inside a scrollable column. Not virtualised: with thousands of rows the widget tree is large, but the UserApps filter keeps it to a few hundred.
     fn build_process_list<'a>(&self, rows: &[DisplayRow<'a>]) -> Element<'a, Message> {
         let selected = self.selected;
 
@@ -1088,6 +1179,7 @@ impl App {
                     total_rss_kib,
                     expanded,
                 } => {
+                    // Chevron shows the *current* state (down = expanded), like a tree view.
                     let chevron = if *expanded { "▼ " } else { "▶ " };
                     // Show "(N)" count badge only when the group has >1 member.
                     let badge = if *count > 1 {
@@ -1098,6 +1190,8 @@ impl App {
                     let label = format!("{chevron}{name}{badge}");
 
                     let rss_mb = *total_rss_kib as f64 / 1024.0;
+
+                    // A group spans many processes, each with its own state, so no single status is shown.
                     let status_str = "—"; // groups don't have a single status
 
                     let name_cell = text(label)
@@ -1112,6 +1206,7 @@ impl App {
                         .color(FG_DIM)
                         .width(Length::Fixed(W_STATUS));
 
+                    // Heat reference values: CPU is scaled against 100 % (one core), memory against 8 GiB, so the bars are comparable across rows.
                     let cpu_cell =
                         heat_cell(*total_cpu, 100.0, W_CPU, format!("{:.1}%", total_cpu));
                     let mem_cell = heat_cell(rss_mb, 8192.0, W_MEM, fmt_mem(rss_mb));
@@ -1139,6 +1234,7 @@ impl App {
                     .align_y(iced::Alignment::Center);
 
                     // Group headers are buttons that toggle expand/collapse.
+                    // The message must own its String; `name` is a borrow tied to the snapshot, which `Message` cannot hold.
                     let owned_name = name.to_string();
                     button(inner)
                         .padding([5, 8])
@@ -1164,6 +1260,7 @@ impl App {
                     let is_sel = selected == Some(p.pid);
 
                     // Alternate row shading for readability.
+                    // Zebra striping uses the row index in the *whole* list (including group headers), not the index within a group.
                     let row_bg = if is_sel {
                         SEL
                     } else if i % 2 == 0 {
@@ -1183,6 +1280,7 @@ impl App {
                         .width(Length::Fixed(W_NAME));
 
                     // State char → human-readable label + colour.
+                    // State letters come from procfs (stat field 3); see the table in `process_status`.
                     let (status_str, status_color) = process_status(p.state.copied());
                     let status_cell = text(status_str)
                         .size(11)
@@ -1228,6 +1326,7 @@ impl App {
                             text_color: FG,
                             ..Default::default()
                         })
+                        // The whole row is a button so the click target is large; style closure copies row_bg (`move`) because the widget outlives this scope.
                         .on_press(Message::SelectRow(pid))
                         .into()
                 }
@@ -1243,6 +1342,7 @@ impl App {
     ///
     /// Shows extended information about the currently selected process, or a
     /// placeholder hint when nothing is selected.
+    // Detail panel reads the process from the *current* snapshot by PID each frame, so it always shows live numbers.
     fn build_detail(
         &self,
         snap: &Snapshot,
@@ -1268,6 +1368,8 @@ impl App {
                     .get(&(p.pid, p.start_ticks.copied()))
                     .copied()
                     .unwrap_or(0.0);
+
+                // unit and cgroup come from procfs and may be unreadable; an em dash is shown instead of an empty string.
                 let unit = p.systemd_unit.value().map(|s| s.as_str()).unwrap_or("—");
                 let cgroup = p.cgroup.value().map(|s| s.as_str()).unwrap_or("—");
                 let (read_r, write_r) = io_map
@@ -1302,6 +1404,7 @@ impl App {
                 .into()
             } else {
                 // The process exited between the click and this render.
+                // The selected PID vanished between ticks; the selection is left set so a recycled PID would reappear (rare, harmless).
                 text("(process exited)").size(12).color(FG_DIM).into()
             }
         } else {
@@ -1332,9 +1435,12 @@ impl App {
     /// `kthreadd_kids` is the pre-computed set of PIDs whose parent is PID 2
     /// (the kernel thread daemon).  Passing it in avoids recomputing it per
     /// process.
+    // Kept as a method (not a free function) because it needs `self.filter`. `kthreadd_kids` and `uid` are
+    // computed once per frame by the caller instead of once per process.
     fn passes_filter(&self, p: &Process, kthreadd_kids: &HashSet<u32>, uid: Option<u32>) -> bool {
         match self.filter {
             FilterMode::All => true,
+            // Comparing Option<u32>: both sides unreadable would match, but the current user's UID is always readable in practice.
             FilterMode::Mine => p.uid.copied() == uid,
             FilterMode::UserApps => {
                 let pid = p.pid;
@@ -1359,6 +1465,7 @@ impl App {
 // ══════════════════════════════════════════════════════════════════════════════
 
 /// Returns the widget shown while the first snapshot is being collected.
+// Shown only before the first Tick has produced a snapshot (at most about one second).
 fn loading_view() -> Element<'static, Message> {
     container(
         column![
@@ -1395,6 +1502,7 @@ fn loading_view() -> Element<'static, Message> {
 /// | Z    | Zombie            | red |
 /// | X    | Dead              | red |
 /// | _    | Unknown           | grey |
+// Unknown or unreadable states map to a dash with the neutral colour rather than being hidden.
 fn process_status(state: Option<char>) -> (&'static str, Color) {
     match state {
         Some('R') => ("Running", STATUS_RUNNING),
@@ -1419,8 +1527,11 @@ fn process_status(state: Option<char>) -> (&'static str, Color) {
 /// * `max`   – the value that represents 100% of the bar width
 /// * `width` – the fixed pixel width of the cell
 /// * `label` – the formatted text to overlay on top of the bar
+// Layering: a canvas (the coloured bar) with a text label stacked on top. Colour thresholds: below 15 %
+// of `max` green, 15-50 % amber, above 50 % red. Example: 30 % CPU of a core is a short amber bar.
 fn heat_cell<'a>(value: f64, max: f64, width: f32, label: String) -> Element<'a, Message> {
     // Clamp fraction to [0, 1] to avoid bar overflow on abnormal readings.
+    // Clamped so a process using more than 100 % CPU (multi-threaded) or more than 8 GiB just fills the cell.
     let frac = (value / max).clamp(0.0, 1.0) as f32;
 
     // Pick bar colour based on how hot the value is (same thresholds as
@@ -1436,6 +1547,7 @@ fn heat_cell<'a>(value: f64, max: f64, width: f32, label: String) -> Element<'a,
     // We use a Canvas to draw the heat bar rectangle behind the text.
     // The canvas is fixed-size and layered using a `container` → `stack`
     // approach: canvas goes first (background), text goes on top.
+    // Fixed 22 px height matches the row height, so bars from adjacent rows join into one continuous column.
     let bar = canvas(HeatBar {
         frac,
         color: bar_color,
@@ -1451,6 +1563,7 @@ fn heat_cell<'a>(value: f64, max: f64, width: f32, label: String) -> Element<'a,
         .width(Length::Fixed(width));
 
     // Use iced's built-in `stack` to layer bar behind label.
+    // `stack!` layers children in order: bar first (bottom), label second (top).
     iced::widget::stack![
         bar,
         container(label_widget)
@@ -1465,6 +1578,7 @@ fn heat_cell<'a>(value: f64, max: f64, width: f32, label: String) -> Element<'a,
 ///
 /// Draws a filled rectangle from x=0 to x=`frac * width` in `color`,
 /// then leaves the remainder transparent.
+// Not interactive: no mouse handling, so it has no state and emits no messages.
 struct HeatBar {
     /// Fill fraction [0.0, 1.0].
     frac: f32,
@@ -1485,6 +1599,7 @@ impl<Message> canvas::Program<Message> for HeatBar {
         _cursor: iced::mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
         // A new Frame is built on every draw call; Iced redraws when the surrounding view changes.
+        // Frame size is the cell bounds, so coordinates inside `fill_rectangle` start at (0, 0) for each cell.
         let mut frame = canvas::Frame::new(renderer, bounds.size());
         // Fill the left portion of the frame with the heat colour.
         frame.fill_rectangle(
@@ -1504,9 +1619,13 @@ impl<Message> canvas::Program<Message> for HeatBar {
 /// We match both prefix patterns (e.g. `"kworker/"`) and exact names
 /// (e.g. `"kthreadd"`). This is a heuristic, not a complete list of kernel
 /// thread names; names and drivers vary across systems, including Linux 7.x.
+// Used by `passes_filter` (UserApps). Duplicated in tui.rs as an inline `starts_with` chain; keep the two lists in sync when editing either.
 fn is_kernel_thread_name(name: &str) -> bool {
     // These are *prefix* patterns — a process whose name starts with any of
     // these strings is considered a kernel thread.
+    // Name prefixes of kernel worker threads and driver helper threads. Order has no meaning. The list is
+    // grouped loosely: scheduler/RCU/memory (kworker .. oom_reaper), block/filesystem (writeback .. btrfs),
+    // crypto/network/storage (cryptd .. nvme), then GPU and generic (drm, card, md).
     const PREFIXES: &[&str] = &[
         "kworker/",
         "kthread",
@@ -1566,8 +1685,11 @@ fn is_kernel_thread_name(name: &str) -> bool {
     ];
     // These are *exact* names — used for short names that would incorrectly
     // match as prefixes of legitimate user-space processes.
+    // Intended for names that are too short to be safe as prefixes. Note `md` also appears in PREFIXES above, so
+    // the exact entry is redundant today and the prefix still hides user programs that start with "md".
     const EXACT: &[&str] = &["kthreadd", "md"];
 
+    // An empty name means the stat line could not be parsed; hiding it keeps blank rows out of the UserApps list.
     name.is_empty() || PREFIXES.iter().any(|p| name.starts_with(p)) || EXACT.contains(&name)
 }
 
@@ -1575,6 +1697,7 @@ fn is_kernel_thread_name(name: &str) -> bool {
 ///
 /// Returns `None` on any parse failure (e.g. running inside a container that
 /// doesn't expose /proc/self).
+// Same /proc/self/status parse as tui.rs (duplicated to keep each front end self-contained).
 fn current_uid() -> Option<u32> {
     std::fs::read_to_string("/proc/self/status")
         .ok()?
@@ -1590,6 +1713,7 @@ fn current_uid() -> Option<u32> {
 ///
 /// * < 1024 MB  → `"123.4 MB"`
 /// * ≥ 1024 MB  → `"1.23 GB"`
+// Examples: 123.4 -> "123.4 MB", 2048.0 -> "2.00 GB". Units are binary (1024) even though the labels say MB/GB.
 fn fmt_mem(mb: f64) -> String {
     if mb >= 1024.0 {
         format!("{:.2} GB", mb / 1024.0)
@@ -1605,6 +1729,7 @@ fn fmt_mem(mb: f64) -> String {
 /// * < 1024 B/s       → `"N B/s"`
 /// * < 1 MiB/s        → `"N.N KB/s"`
 /// * ≥ 1 MiB/s        → `"N.N MB/s"`
+// Examples: None -> "?", 0.4 -> "0", 512.0 -> "512 B/s", 2048.0 -> "2.0 KB/s". Differs slightly from main.rs `bytes_rate`.
 fn fmt_rate(v: Option<f64>) -> String {
     match v {
         None => "?".into(),
@@ -1623,6 +1748,8 @@ fn fmt_rate(v: Option<f64>) -> String {
 ///
 /// Called from `main.rs` when `--gui` is passed.  Returns `iced::Result` which
 /// is either `Ok(())` on clean exit or an Iced platform error.
+// `run_with(App::new)` hands iced the constructor so the initial state is built inside iced's runtime.
+// Window is 980x680: wide enough for the 740 px of columns plus padding. No minimum size is enforced.
 pub fn run() -> iced::Result {
     iced::application(App::title, App::update, App::view)
         .subscription(App::subscription)
