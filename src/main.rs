@@ -655,7 +655,8 @@ fn print_namespaces_json(namespaces: &Field<Vec<(String, String)>>) {
 }
 
 /// CPU% per process between two snapshots: delta(user+system ticks) / delta(total system ticks)
-/// * cpu_count * 100. This is per-core percent, like `top`, so a busy multi-thread process can exceed 100.
+/// multiplied by cpu_count * 100. This is per-core percent, like `top`, so a busy multi-thread process can exceed 100.
+///
 /// Entries are omitted (never guessed) when counters are missing, went backwards, or the process is new.
 fn rates(snapshot: &Snapshot, previous: Option<&Snapshot>) -> HashMap<(u32, Option<u64>), f64> {
     // Starts empty: every early `return out` below means "rates unavailable" and callers print `?`/null.

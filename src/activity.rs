@@ -75,7 +75,7 @@ pub fn collect(snapshot: &Snapshot) -> Inventory {
     // Step 2: Build and return the completed inventory record
     Inventory {
         sockets: collect_sockets(snapshot),
-        /// Field::map applies the parser only if the read succeeded; otherwise the error status passes through.
+        // Field::map applies the parser only if the read succeeded; otherwise the error status passes through.
         mounts: read_bytes("/proc/self/mountinfo").map(|v| parse_mounts(&v)),
         cgroup_count: count_cgroups(Path::new("/sys/fs/cgroup")),
         cgroups: list_cgroups(Path::new("/sys/fs/cgroup")),
@@ -216,7 +216,7 @@ fn parse_unix(bytes: &[u8]) -> Vec<SocketRecord> {
                 protocol: "unix",
                 local: "-".into(),
                 remote: "-".into(),
-                /// Columns (/proc/net/unix): Num RefCount Protocol Flags Type St Inode [Path]. Unnamed sockets have no 8th column.
+                // Columns (/proc/net/unix): Num RefCount Protocol Flags Type St Inode [Path]. Unnamed sockets have no 8th column.
                 state: p.get(5).unwrap_or(&"?").to_string(),
                 inode: p.get(6).and_then(|v| v.parse().ok()),
                 path: p.get(7).map(|v| v.to_string()),
