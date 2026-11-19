@@ -143,7 +143,6 @@ pub struct Capture {
 
 /// Binds to the kernel proc connector and captures lifecycle events up to a given limit.
 pub fn capture(limit: usize, timeout: Duration) -> io::Result<Capture> {
-    // Step 1: Create Netlink connector socket
     // Opening this socket usually needs CAP_NET_ADMIN (root); failures are translated by capability_error().
     let fd = unsafe { socket(AF_NETLINK, SOCK_DGRAM, NETLINK_CONNECTOR) };
     if fd < 0 {
@@ -151,7 +150,6 @@ pub fn capture(limit: usize, timeout: Duration) -> io::Result<Capture> {
     }
     let socket = Socket(fd);
 
-    // Step 2: Bind socket to connector multicast group
     let address = SockAddrNl {
         family: AF_NETLINK as u16,
         pad: 0,
@@ -164,7 +162,7 @@ pub fn capture(limit: usize, timeout: Duration) -> io::Result<Capture> {
         return Err(capability_error(io::Error::last_os_error()));
     }
 
-    // Step 3: Configure socket receive timeout
+    // Without a timeout recv() would block forever on a quiet system; with it the capture window ends cleanly.
     let tv = TimeVal {
         seconds: timeout.as_secs() as i64,
         microseconds: timeout.subsec_micros() as i64,
@@ -182,14 +180,12 @@ pub fn capture(limit: usize, timeout: Duration) -> io::Result<Capture> {
         return Err(io::Error::last_os_error());
     }
 
-    // Step 4: Transmit connector subscription request
     // Without this PROC_CN_MCAST_LISTEN request the kernel does not emit process events.
     let subscribe = subscription_message(unsafe { getpid() } as u32, true);
     if unsafe { send(fd, subscribe.as_ptr() as *const c_void, subscribe.len(), 0) } < 0 {
         return Err(capability_error(io::Error::last_os_error()));
     }
 
-    // Step 5: Read event stream and track sequence continuity
     let mut events = Vec::new();
     // Last sequence seen per CPU. A jump larger than +1 means messages were lost.
     let mut last_sequence: HashMap<u32, u32> = HashMap::new();
@@ -221,7 +217,6 @@ pub fn capture(limit: usize, timeout: Duration) -> io::Result<Capture> {
         }
     }
 
-    // Step 6: Unsubscribe from connector notifications prior to close
     // Best-effort polite unsubscribe; the result is ignored because closing the socket ends the
     // subscription anyway. subscription_message encodes `false` as PROC_CN_MCAST_IGNORE (2).
     let unsubscribe = subscription_message(unsafe { getpid() } as u32, false);
@@ -343,6 +338,9 @@ fn get64(b: &[u8], o: usize) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pins down the wire layout: a hand-built exec event must decode to the right kind, so a
+    /// wrong offset in parse() (which would silently misreport PIDs) fails here.
     /// Builds a minimal 68-byte packet by hand: what=2 (exec) @36, cpu=3 @40, timestamp=99 @44, pid=42 @52.
     #[test]
     fn parses_exec() {
@@ -353,6 +351,8 @@ mod tests {
         put32(&mut b, 52, 42);
         assert_eq!(parse(&b).unwrap().kind, Kind::Exec { pid: 42 });
     }
+    /// The subscribe packet must be exactly 40 bytes with the LISTEN op (1); a wrong length or op
+    /// means no events ever arrive, and nothing else in the test suite would notice.
     #[test]
     fn subscription_is_well_formed() {
         let b = subscription_message(7, true);

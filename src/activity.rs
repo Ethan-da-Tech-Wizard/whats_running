@@ -8,6 +8,12 @@
 //          Correlates open network socket inodes back to owning process PIDs.
 // ==============================================================================
 
+// How it fits the app: main.rs builds one process `Snapshot` (procfs.rs), then calls `collect` here
+// to add the "background activity" view (sockets, mounts, cgroups, systemd units). check.rs and the
+// TUI/GUI render the resulting `Inventory`. Every source is read-only (/proc, /sys, `systemctl list-*`).
+// Failure model: each field is a `Field<T>` so a denied or missing source degrades to a status
+// instead of aborting the whole report. Known limit: owner PIDs for sockets are only visible for
+// processes the current user may inspect.
 use crate::procfs::{Field, Snapshot};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -62,7 +68,6 @@ pub struct Inventory {
 
 /// Collects system inventory data matching the given process snapshot.
 pub fn collect(snapshot: &Snapshot) -> Inventory {
-    // Step 1: Extract unique systemd unit names across all processes
     let mut units: Vec<String> = snapshot
         .processes
         .iter()
@@ -72,7 +77,7 @@ pub fn collect(snapshot: &Snapshot) -> Inventory {
     units.sort();
     units.dedup();
 
-    // Step 2: Build and return the completed inventory record
+    // Everything below is a read-only observation; no unit or socket is ever modified.
     Inventory {
         sockets: collect_sockets(snapshot),
         // Field::map applies the parser only if the read succeeded; otherwise the error status passes through.
@@ -124,7 +129,6 @@ pub fn collect(snapshot: &Snapshot) -> Inventory {
 /// Collects open TCP, UDP, and Unix domain sockets, mapping them to owner PIDs.
 fn collect_sockets(snapshot: &Snapshot) -> Field<Vec<SocketRecord>> {
     let mut all = Vec::new();
-    // Step 1: Ingest IP sockets from /proc/net
     // Table-driven so IPv4/IPv6 and TCP/UDP share one parsing routine.
     for (protocol, path) in [
         ("tcp", "/proc/net/tcp"),
@@ -139,12 +143,10 @@ fn collect_sockets(snapshot: &Snapshot) -> Field<Vec<SocketRecord>> {
             other => return failure(other),
         }
     }
-    // Step 2: Ingest Unix domain sockets
     match read_bytes("/proc/net/unix") {
         Field::Value(v) => all.extend(parse_unix(&v)),
         other => return failure(other),
     }
-    // Step 3: Correlate socket inodes with process file descriptors
     // Done last, once: walking every process's fd table is the expensive part.
     let owners = socket_owners(snapshot);
     for socket in &mut all {
