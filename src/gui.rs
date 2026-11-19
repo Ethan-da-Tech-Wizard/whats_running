@@ -56,6 +56,8 @@
 // ─── Standard imports ─────────────────────────────────────────────────────────
 use std::collections::{HashMap, HashSet};
 
+/// Same shape as main.rs `IoRates`: (pid, start_ticks) -> (read B/s, write B/s). Keying by start time
+/// keeps a recycled PID from inheriting another process's rate.
 type IoRateMap = HashMap<(u32, Option<u64>), (Option<f64>, Option<f64>)>;
 use std::time::Duration;
 
@@ -152,12 +154,14 @@ const HEAT_LOW: Color = Color {
     b: 0.30,
     a: 0.55,
 }; // translucent green
+/// Amber heat-bar colour for medium load.
 const HEAT_MED: Color = Color {
     r: 0.80,
     g: 0.62,
     b: 0.10,
     a: 0.55,
 }; // translucent amber
+/// Red heat-bar colour for high load.
 const HEAT_HIGH: Color = Color {
     r: 0.80,
     g: 0.22,
@@ -172,18 +176,21 @@ const STATUS_RUNNING: Color = Color {
     b: 0.45,
     a: 1.0,
 }; // green
+/// Process state `S`/`I`-style idle states render in the dim grey.
 const STATUS_SLEEPING: Color = Color {
     r: 0.50,
     g: 0.52,
     b: 0.56,
     a: 1.0,
 }; // grey (same as FG_DIM)
+/// Zombie (`Z`) processes are highlighted in red because they indicate an unreaped child.
 const STATUS_ZOMBIE: Color = Color {
     r: 0.90,
     g: 0.20,
     b: 0.20,
     a: 1.0,
 }; // red
+/// Any other state (stopped, disk sleep, ...) shows amber.
 const STATUS_OTHER: Color = Color {
     r: 1.00,
     g: 0.70,
@@ -194,6 +201,7 @@ const STATUS_OTHER: Color = Color {
 // Column pixel widths — kept as named constants so every function that lays out
 // a row uses the same numbers and columns stay perfectly aligned.
 const W_NAME: f32 = 280.0;
+/// Fixed pixel widths of the remaining columns; header cells and data cells share them to stay aligned.
 const W_STATUS: f32 = 90.0;
 const W_CPU: f32 = 90.0;
 const W_MEM: f32 = 100.0;
@@ -359,6 +367,7 @@ pub struct App {
     update_speed: UpdateSpeed,
 }
 
+/// Application logic: constructor, `update` (state transitions), `view` (widget tree), `subscription` (timers/keys).
 impl App {
     /// Construct the initial application state and return the first `Task`.
     ///
@@ -1463,6 +1472,7 @@ struct HeatBar {
     color: Color,
 }
 
+/// Generic over Message because the bar emits no events; `State = ()` since it keeps no interaction state.
 impl<Message> canvas::Program<Message> for HeatBar {
     type State = ();
 
@@ -1474,6 +1484,7 @@ impl<Message> canvas::Program<Message> for HeatBar {
         bounds: iced::Rectangle,
         _cursor: iced::mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
+        // A new Frame is built on every draw call; Iced redraws when the surrounding view changes.
         let mut frame = canvas::Frame::new(renderer, bounds.size());
         // Fill the left portion of the frame with the heat colour.
         frame.fill_rectangle(
