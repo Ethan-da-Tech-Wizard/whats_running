@@ -62,9 +62,18 @@ struct TimeVal {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kind {
     /// PIDs here are the kernel's per-thread ids (the `pid` fields of the proc event, not tgid).
-    Fork { parent: u32, child: u32 },
-    Exec { pid: u32 },
-    Exit { pid: u32, code: u32, signal: u32 },
+    Fork {
+        parent: u32,
+        child: u32,
+    },
+    Exec {
+        pid: u32,
+    },
+    Exit {
+        pid: u32,
+        code: u32,
+        signal: u32,
+    },
     /// Any event type this tool does not decode (uid/gid changes, sid, ptrace, comm, coredump...); keeps the raw code.
     Other(u32),
 }
