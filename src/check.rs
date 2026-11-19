@@ -12,6 +12,7 @@ use crate::activity::Inventory;
 use crate::procfs::{Field, Snapshot};
 use crate::sanitize;
 use std::collections::HashMap;
+// std's address types handle all formatting (including IPv6 zero compression) for decoded sockets.
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 /// Prints a concise summary report of running processes and listening network ports.
@@ -22,6 +23,7 @@ pub fn report(snapshot: &Snapshot, inventory: &Inventory) {
         .iter()
         .map(|p| (p.name.value().cloned().unwrap_or_else(|| "?".into()), p.pid))
         .collect();
+    // Case-insensitive name order, then PID, gives stable and human-scannable output.
     names.sort_by(|a, b| {
         a.0.to_lowercase()
             .cmp(&b.0.to_lowercase())
@@ -34,6 +36,8 @@ pub fn report(snapshot: &Snapshot, inventory: &Inventory) {
         names.len()
     );
     for (name, pid) in &names {
+        // sanitize() strips control characters from process names, which are attacker-controlled and
+        // could otherwise inject terminal escape sequences.
         println!("  {:<28} pid {}", sanitize(name), pid);
     }
 
@@ -54,6 +58,7 @@ fn print_listening_ports(snapshot: &Snapshot, inventory: &Inventory) {
         .collect();
 
     // Step 2: Validate socket inventory field
+    // `Field` models data that may be unavailable (permissions, non-Linux); show the status instead of failing.
     let sockets = match &inventory.sockets {
         Field::Value(sockets) => sockets,
         other => {
@@ -66,6 +71,7 @@ fn print_listening_ports(snapshot: &Snapshot, inventory: &Inventory) {
     let mut listening: Vec<_> = sockets
         .iter()
         .filter(|s| matches!(s.protocol, "tcp" | "tcp6" | "udp" | "udp6"))
+        // TCP state 0x0A is LISTEN. UDP is connectionless and has no LISTEN state, so every bound UDP socket is shown.
         .filter(|s| s.protocol.starts_with("udp") || s.state == "0A")
         .collect();
 
@@ -75,9 +81,12 @@ fn print_listening_ports(snapshot: &Snapshot, inventory: &Inventory) {
     }
 
     // Step 4: Sort and print formatted listening socket details
+    // Sorts by the raw hex string, which groups by address; it is not numeric port order.
     listening.sort_by(|a, b| a.local.cmp(&b.local));
     for socket in listening {
         let address = decode_local(&socket.local, socket.protocol);
+        // Owners are resolved elsewhere via socket inode -> PID; this is empty when the process is not visible
+        // (e.g. other users' processes without privileges).
         let owner = if socket.owners.is_empty() {
             "unknown owner".to_string()
         } else {
@@ -99,6 +108,7 @@ fn print_listening_ports(snapshot: &Snapshot, inventory: &Inventory) {
 
 /// Decodes Linux /proc/net hex-encoded IP addresses and ports into standard formats.
 fn decode_local(local: &str, protocol: &str) -> String {
+    // /proc/net lines look like `0100007F:0016`; on any parse failure the raw text is shown rather than hiding the socket.
     let Some((addr_hex, port_hex)) = local.split_once(':') else {
         return local.to_string();
     };
@@ -116,6 +126,8 @@ fn decode_local(local: &str, protocol: &str) -> String {
 /// Decodes 8-character little-endian hexadecimal IPv4 address string into Ipv4Addr.
 fn decode_v4(hex: &str) -> Option<Ipv4Addr> {
     let bytes = hex_bytes(hex)?;
+    // /proc/net/tcp prints the IPv4 address as a native-endian u32 (little-endian on x86/ARM64),
+    // so the bytes arrive reversed: 0100007F is 127.0.0.1. Reversed on the next line.
     let [a, b, c, d] = bytes[..].try_into().ok()?;
     Some(Ipv4Addr::new(d, c, b, a))
 }
@@ -124,6 +136,8 @@ fn decode_v4(hex: &str) -> Option<Ipv4Addr> {
 fn decode_v6(hex: &str) -> Option<Ipv6Addr> {
     let bytes = hex_bytes(hex)?;
     let bytes: [u8; 16] = bytes[..].try_into().ok()?;
+    // /proc/net/tcp6 prints four 32-bit words, each byte-swapped; words stay in order but the bytes
+    // within each word must be reversed. That is what the nested loops do.
     let mut reordered = [0u8; 16];
     for word in 0..4 {
         for byte in 0..4 {
@@ -135,6 +149,7 @@ fn decode_v6(hex: &str) -> Option<Ipv6Addr> {
 
 /// Converts a hex string into a byte vector.
 fn hex_bytes(hex: &str) -> Option<Vec<u8>> {
+    // An odd number of hex digits cannot form whole bytes.
     if !hex.len().is_multiple_of(2) {
         return None;
     }
@@ -147,6 +162,7 @@ fn hex_bytes(hex: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// 0100007F is 127.0.0.1 in /proc byte order and 0x0016 is port 22.
     #[test]
     fn decodes_ipv4_loopback_and_port() {
         assert_eq!(decode_local("0100007F:0016", "tcp"), "127.0.0.1:22");
@@ -155,6 +171,7 @@ mod tests {
     fn decodes_ipv4_wildcard() {
         assert_eq!(decode_local("00000000:1F90", "tcp"), "0.0.0.0:8080");
     }
+    /// `...01000000` is ::1 after the per-word byte swap; 0x0050 is port 80.
     #[test]
     fn decodes_ipv6_loopback() {
         assert_eq!(
