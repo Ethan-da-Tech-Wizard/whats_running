@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 288" width="860" height="288">
+  <defs>
+    <style>
+      .terminal-bg { fill: #181825; }
+      .terminal-header { fill: #11111b; }
+      .terminal-title { fill: #a6adc8; font-family: monospace, monospace; font-size: 13px; font-weight: bold; text-anchor: middle; }
+      .terminal-text { fill: #cdd6f4; font-family: monospace, monospace; font-size: 13px; }
+      .btn-red { fill: #f38ba8; }
+      .btn-yellow { fill: #f9e2af; }
+      .btn-green { fill: #a6e3a1; }
+    </style>
+  </defs>
+  <rect class="terminal-bg" x="0" y="0" width="860" height="288" rx="10" ry="10" />
+  <path class="terminal-header" d="M 0 10 A 10 10 0 0 1 10 0 L 850 0 A 10 10 0 0 1 860 10 L 860 42 L 0 42 Z" />
+  <circle class="btn-red" cx="24" cy="21" r="6" />
+  <circle class="btn-yellow" cx="42" cy="21" r="6" />
+  <circle class="btn-green" cx="60" cy="21" r="6" />
+  <text class="terminal-title" x="430" y="26">Whats Running Snapshot &amp; Process Telemetry</text>
+  <g class="terminal-text">
+    <text x="24" y="80">$ whats-running --snapshot --format json</text>
+    <text x="24" y="102">[whats-running] Scanning Linux procfs for unprivileged process snapshot...</text>
+    <text x="24" y="124">[procfs] 184 process entries discovered in /proc</text>
+    <text x="24" y="146">[procfs] Filtering kernel threads and systemd transient scopes...</text>
+    <text x="24" y="168">         -&gt; 42 distinct user-space application processes identified</text>
+    <text x="24" y="190">         -&gt; Memory footprint: 1.84 GiB active RSS</text>
+    <text x="24" y="212">         -&gt; CPU usage distribution: 6 cores active, 92.4% idle</text>
+    <text x="24" y="234">[verdict] Snapshot recorded: ~/.local/share/whats-running/snapshots/snap_0042.json</text>
+    <text x="24" y="256">[status] Verified local-first: 0 network sockets bound, 0 pings transmitted.</text>
+  </g>
+</svg>

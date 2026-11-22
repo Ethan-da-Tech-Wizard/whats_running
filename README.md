@@ -153,6 +153,25 @@ This project strictly adheres to the **[Magi Bible AI Coding Foundations](MAGI_B
 
 ---
 
+## Visual Walkthrough & Diagnostics
+
+<p align="center">
+  <img src="assets/whats_running_check.svg" alt="Whats Running Check Telemetry" width="860">
+</p>
+
+<p align="center">
+  <img src="assets/whats_running_snapshot.svg" alt="Whats Running Snapshot & Process Telemetry" width="860">
+</p>
+
+## Magi Standards & AI Contributor Onboarding
+
+All process inspection modules, TUI views, and procfs parsers adhere to the **[Magi Bible: Engineering Foundations & Safety Standards for AI Coding](MAGI_BIBLE.md)** and **[MAGI_LOOK_HERE.md](MAGI_LOOK_HERE.md)**:
+- **[MAGI_LOOK_HERE.md](MAGI_LOOK_HERE.md)**: Universal contributor & AI agent onboarding guide, visual walkthrough requirements, zero-PII validation rules.
+- **[MAGI_BIBLE.md](MAGI_BIBLE.md)**: Core engineering foundations, multi-seat governance, and verification checklists.
+- **Rule 16 Commenting Invariant:** Code contains comprehensive structural headers and inline rationale.
+- **Fail-Closed Safety:** Refuses unprivileged unsafe memory access, never edits system files, and requires no root access.
+- **Zero Telemetry & Zero PII:** Completely local-first, offline, and free of external trackers or telemetry.
+
 ## License
 
 Original project code retains dual **[MIT](LICENSE-MIT)** OR **[Apache-2.0](LICENSE-APACHE)** licensing terms.
